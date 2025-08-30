@@ -1,1 +1,2 @@
 ERC8004Messenger.sol deployed to citrea testnet:0x4f476806b3E7563E6b3ba9f4b5e7350aFD0c794e
+AIAgentStaking.sol deployed to citrea:0x60dfbE2d0087079fEA8B5Fd7EC0d62a84C7FA891
