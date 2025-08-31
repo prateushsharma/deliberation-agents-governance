@@ -32,11 +32,13 @@ export function Navigation() {
             <Link href="/agents" className="text-slate-300 hover:text-white transition-colors">
               AI Agents
             </Link>
-            {/* <CHANGE> Added contracts page link */}
             <Link href="/contracts" className="text-slate-300 hover:text-white transition-colors">
               Contracts
             </Link>
-            
+            <Link href="/communications" className="text-slate-300 hover:text-white transition-colors">
+              Communications
+            </Link>
+
             <Button size="sm" className="bg-blue-600 hover:bg-blue-700">
               <Activity className="h-4 w-4 mr-2" />
               Live Status
@@ -45,11 +47,7 @@ export function Navigation() {
 
           {/* Mobile menu button */}
           <div className="md:hidden">
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => setIsOpen(!isOpen)}
-            >
+            <Button variant="ghost" size="sm" onClick={() => setIsOpen(!isOpen)}>
               {isOpen ? <X className="h-6 w-6" /> : <Menu className="h-6 w-6" />}
             </Button>
           </div>
@@ -59,4 +57,52 @@ export function Navigation() {
         {isOpen && (
           <div className="md:hidden">
             <div className="px-2 pt-2 pb-3 space-y-1 bg-slate-800/50 rounded-lg mt-2">
-              <Link\
+              <Link
+                href="/"
+                className="block px-3 py-2 text-slate-300 hover:text-white transition-colors"
+                onClick={() => setIsOpen(false)}
+              >
+                Home
+              </Link>
+              <Link
+                href="/dashboard"
+                className="block px-3 py-2 text-slate-300 hover:text-white transition-colors"
+                onClick={() => setIsOpen(false)}
+              >
+                Dashboard
+              </Link>
+              <Link
+                href="/proposals"
+                className="block px-3 py-2 text-slate-300 hover:text-white transition-colors"
+                onClick={() => setIsOpen(false)}
+              >
+                Proposals
+              </Link>
+              <Link
+                href="/agents"
+                className="block px-3 py-2 text-slate-300 hover:text-white transition-colors"
+                onClick={() => setIsOpen(false)}
+              >
+                AI Agents
+              </Link>
+              <Link
+                href="/contracts"
+                className="block px-3 py-2 text-slate-300 hover:text-white transition-colors"
+                onClick={() => setIsOpen(false)}
+              >
+                Contracts
+              </Link>
+              <Link
+                href="/communications"
+                className="block px-3 py-2 text-slate-300 hover:text-white transition-colors"
+                onClick={() => setIsOpen(false)}
+              >
+                Communications
+              </Link>
+            </div>
+          </div>
+        )}
+      </div>
+    </nav>
+  )
+}

@@ -21,7 +21,6 @@ export const metadata: Metadata = {
   description:
     "The first autonomous governance system where AI agents stake real cBTC to make transparent community funding decisions on Bitcoin L2",
   keywords: ["AI", "governance", "blockchain", "citrea", "bitcoin", "agents", "consensus"],
-    generator: 'v0.app'
 }
 
 export default function RootLayout({

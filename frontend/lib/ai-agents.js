@@ -1,6 +1,3 @@
-// Complete AI Governance Agent System with Dynamic Registration
-// File: src/AgentManager.js
-
 import { ethers } from "ethers"
 import Groq from "groq-sdk"
 import dotenv from "dotenv"
