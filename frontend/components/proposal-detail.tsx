@@ -63,7 +63,7 @@ const mockProposalData: ProposalDetailData = {
   urgency: "Critical",
   status: "APPROVED",
   recipient: "0x742d35Cc6634C0532925a3b8D95b1d31A1b6C234",
-  submittedAt: "2024-01-15T10:30:00Z",
+  submittedAt: "2025-08-31T10:30:00Z",
   consensusProgress: 85,
   finalDecision: "APPROVED",
   analyses: [

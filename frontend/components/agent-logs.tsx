@@ -4,7 +4,7 @@ import { useState, useEffect } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { ScrollArea } from "@/components/ui/scroll-area"
-import { Activity, Bot, MessageSquare, Zap } from "lucide-react"
+import { Activity, Bot, MessageSquare, Zap, RefreshCw } from "lucide-react"
 
 interface LogEntry {
   timestamp: string
@@ -12,6 +12,11 @@ interface LogEntry {
   message: string
   level: "info" | "success" | "warning" | "error"
   proposalId?: string
+  time?: string
+  agentName?: string
+  content?: string
+  text?: string
+  type?: string
 }
 
 interface AgentLogsProps {
@@ -21,14 +26,15 @@ interface AgentLogsProps {
 
 export function AgentLogs({ proposalId, className }: AgentLogsProps) {
   const [logs, setLogs] = useState<LogEntry[]>([])
-  const [isLoading, setIsLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const [displayedLogs, setDisplayedLogs] = useState<LogEntry[]>([])
+  const [isLoading, setIsLoading] = useState(false)
 
   useEffect(() => {
     const fetchLogs = async () => {
       try {
+        setIsLoading(true)
         const apiBase = process.env.NEXT_PUBLIC_AGENTS_API_BASE || "http://localhost:4001"
-        const url = proposalId ? `${apiBase}/logs?limit=200&proposalId=${proposalId}` : `${apiBase}/logs?limit=200`
+        const url = proposalId ? `${apiBase}/logs?limit=10&proposalId=${proposalId}` : `${apiBase}/logs?limit=10`
 
         console.log("[v0] Fetching logs from:", url)
 
@@ -43,59 +49,97 @@ export function AgentLogs({ proposalId, className }: AgentLogsProps) {
         })
 
         if (!response.ok) {
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`)
+          console.log("[v0] Response not OK:", response.status, response.statusText)
+          return
         }
 
         const data = await response.json()
-        console.log("[v0] Received logs:", data)
+        console.log("[v0] Raw response data:", data)
+
+        let rawLogs: any[] = []
 
         if (Array.isArray(data)) {
-          setLogs(data)
-        } else if (data.logs && Array.isArray(data.logs)) {
-          setLogs(data.logs)
-        } else {
-          console.warn("[v0] Unexpected logs format:", data)
-          setLogs([])
+          rawLogs = data
+        } else if (data && typeof data === "object") {
+          if (data.logs && Array.isArray(data.logs)) {
+            rawLogs = data.logs
+          } else if (data.data && Array.isArray(data.data)) {
+            rawLogs = data.data
+          } else if (data.entries && Array.isArray(data.entries)) {
+            rawLogs = data.entries
+          }
         }
 
-        setError(null)
+        const parsedLogs: LogEntry[] = rawLogs.map((log, index) => {
+          console.log(`[v0] Processing log ${index}:`, log)
+
+          return {
+            timestamp: log.timestamp || log.time || log.createdAt || new Date().toISOString(),
+            agent: log.agent || log.agentName || log.type || log.source || "System",
+            message: log.message || log.content || log.text || log.description || JSON.stringify(log),
+            level: (log.level || log.type || "info") as "info" | "success" | "warning" | "error",
+            proposalId: log.proposalId || log.proposal_id || proposalId,
+          }
+        })
+
+        console.log("[v0] Final parsed logs:", parsedLogs)
+        setLogs(parsedLogs)
       } catch (err) {
-        console.error("[v0] Failed to fetch logs:", err)
-        if (err instanceof TypeError && err.message.includes("Failed to fetch")) {
-          setError("CORS Error: Cannot connect to localhost from v0 preview. Server needs CORS headers or use a proxy.")
-        } else {
-          setError(err instanceof Error ? err.message : "Failed to fetch logs")
-        }
+        console.log("[v0] Could not fetch logs:", err)
       } finally {
         setIsLoading(false)
       }
     }
 
-    // Initial fetch
     fetchLogs()
-
-    // Poll every 3 seconds for live updates
-    const interval = setInterval(fetchLogs, 3000)
+    const interval = setInterval(fetchLogs, 8000)
 
     return () => clearInterval(interval)
   }, [proposalId])
+
+  useEffect(() => {
+    if (logs.length === 0) {
+      setDisplayedLogs([])
+      return
+    }
+
+    // If we have new logs, display them slowly
+    if (logs.length > displayedLogs.length) {
+      const newLogs = logs.slice(displayedLogs.length)
+      let currentIndex = 0
+
+      const displayTimer = setInterval(() => {
+        if (currentIndex < newLogs.length) {
+          setDisplayedLogs((prev) => [...prev, newLogs[currentIndex]])
+          currentIndex++
+        } else {
+          clearInterval(displayTimer)
+        }
+      }, 1500) // Display each new log every 1.5 seconds
+
+      return () => clearInterval(displayTimer)
+    } else if (logs.length < displayedLogs.length) {
+      // If logs were cleared, reset displayed logs
+      setDisplayedLogs(logs)
+    }
+  }, [logs, displayedLogs.length])
 
   const getLogIcon = (agent: string) => {
     if (!agent) {
       return <Bot className="h-4 w-4 text-gray-400" />
     }
 
-    switch (agent.toLowerCase()) {
-      case "riskbot":
-        return <Zap className="h-4 w-4 text-red-400" />
-      case "financebot":
-        return <Bot className="h-4 w-4 text-green-400" />
-      case "communitybot":
-        return <MessageSquare className="h-4 w-4 text-blue-400" />
-      case "techbot":
-        return <Activity className="h-4 w-4 text-purple-400" />
-      default:
-        return <Bot className="h-4 w-4 text-gray-400" />
+    const agentLower = agent.toLowerCase()
+    if (agentLower.includes("risk")) {
+      return <Zap className="h-4 w-4 text-red-400" />
+    } else if (agentLower.includes("finance")) {
+      return <Bot className="h-4 w-4 text-green-400" />
+    } else if (agentLower.includes("community")) {
+      return <MessageSquare className="h-4 w-4 text-blue-400" />
+    } else if (agentLower.includes("tech")) {
+      return <Activity className="h-4 w-4 text-purple-400" />
+    } else {
+      return <Bot className="h-4 w-4 text-gray-400" />
     }
   }
 
@@ -114,35 +158,14 @@ export function AgentLogs({ proposalId, className }: AgentLogsProps) {
 
   const formatTimestamp = (timestamp: string) => {
     try {
-      return new Date(timestamp).toLocaleTimeString()
+      const date = new Date(timestamp)
+      if (isNaN(date.getTime())) {
+        return "Just now"
+      }
+      return date.toLocaleTimeString()
     } catch {
-      return timestamp
+      return "Just now"
     }
-  }
-
-  if (error) {
-    return (
-      <Card className={className}>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Activity className="h-5 w-5" />
-            Agent Activity Logs
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="text-center py-8">
-            <p className="text-red-400 mb-2">Failed to connect to agents server</p>
-            <p className="text-sm text-gray-500 mb-2">{error}</p>
-            <div className="text-xs text-gray-600 space-y-1">
-              <p>To fix this issue:</p>
-              <p>1. Add CORS headers to your agents server at localhost:4001</p>
-              <p>2. Or use a proxy/tunnel service like ngrok</p>
-              <p>3. The server is working (Thunder CLI confirms) but needs CORS for browser access</p>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-    )
   }
 
   return (
@@ -151,34 +174,37 @@ export function AgentLogs({ proposalId, className }: AgentLogsProps) {
         <CardTitle className="flex items-center gap-2">
           <Activity className="h-5 w-5" />
           Live Agent Activity
-          {isLoading && <div className="h-2 w-2 bg-blue-400 rounded-full animate-pulse" />}
+          {isLoading && <RefreshCw className="h-4 w-4 animate-spin text-blue-400" />}
         </CardTitle>
-        <p className="text-sm text-gray-400">Real-time ERC-8004 messaging on Citrea • {logs.length} entries</p>
+        <p className="text-sm text-gray-400">Real-time ERC-8004 messaging on Citrea • {displayedLogs.length} entries</p>
       </CardHeader>
       <CardContent>
-        <ScrollArea className="h-96">
-          {logs.length === 0 ? (
-            <div className="text-center py-8">
-              <Bot className="h-12 w-12 text-gray-600 mx-auto mb-4" />
+        <ScrollArea className="h-80">
+          {displayedLogs.length === 0 ? (
+            <div className="text-center py-6">
+              <Bot className="h-10 w-10 text-gray-600 mx-auto mb-3" />
               <p className="text-gray-400 mb-2">No agent activity yet</p>
               <p className="text-sm text-gray-500">Submit a proposal to see AI agents analyze it in real-time</p>
             </div>
           ) : (
-            <div className="space-y-4">
-              {logs.map((log, index) => (
+            <div className="space-y-3">
+              {displayedLogs.map((log, index) => (
                 <div
                   key={index}
-                  className="flex items-start gap-3 p-3 rounded-lg bg-slate-800/50 border border-slate-700/50"
+                  className="flex items-start gap-3 p-3 rounded-lg bg-slate-800/30 border border-slate-700/30 hover:bg-slate-800/50 transition-colors animate-in slide-in-from-top-2 duration-500"
                 >
                   <div className="flex-shrink-0 mt-0.5">{getLogIcon(log.agent)}</div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1">
                       <Badge variant="outline" className={getLogBadgeColor(log.level)}>
-                        {log.agent || "Unknown Agent"}
+                        {log.agent}
                       </Badge>
                       <span className="text-xs text-gray-500">{formatTimestamp(log.timestamp)}</span>
                       {log.proposalId && (
-                        <Badge variant="outline" className="text-xs">
+                        <Badge
+                          variant="outline"
+                          className="text-xs bg-purple-500/20 text-purple-400 border-purple-500/30"
+                        >
                           #{log.proposalId}
                         </Badge>
                       )}

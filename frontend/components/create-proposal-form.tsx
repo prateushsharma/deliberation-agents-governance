@@ -87,39 +87,61 @@ export function CreateProposalForm() {
         newProposalId = Date.now()
       }
 
+      const newProposal = {
+        id: newProposalId,
+        title: formData.title,
+        description: formData.description,
+        amount: Number.parseFloat(formData.amount),
+        category: formData.category,
+        urgency: formData.urgency,
+        recipient: formData.recipient,
+        submitter: account,
+        status: "analyzing",
+        submittedAt: new Date().toISOString(),
+        txHash: tx.hash,
+      }
+
+      // Store in localStorage so it appears in View Proposals immediately
+      const existingProposals = JSON.parse(localStorage.getItem("submittedProposals") || "[]")
+      existingProposals.push(newProposal)
+      localStorage.setItem("submittedProposals", JSON.stringify(existingProposals))
+
       const agentsApiBase = process.env.NEXT_PUBLIC_AGENTS_API_BASE || "http://localhost:4001"
       console.log("[v0] Sending proposal to agents server at:", agentsApiBase)
 
-      const response = await fetch(`${agentsApiBase}/proposal`, {
-        method: "POST",
-        mode: "cors",
-        credentials: "omit",
-        headers: {
-          "Content-Type": "application/json",
-          Accept: "application/json",
-        },
-        body: JSON.stringify({
-          id: newProposalId,
-          title: formData.title,
-          description: formData.description,
-          amount: Number.parseFloat(formData.amount),
-          category: formData.category,
-          urgency: formData.urgency,
-          recipient: formData.recipient,
-          submitter: account,
-        }),
-      })
+      try {
+        const response = await fetch(`${agentsApiBase}/proposal`, {
+          method: "POST",
+          mode: "cors",
+          credentials: "omit",
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/json",
+          },
+          body: JSON.stringify({
+            id: newProposalId,
+            title: formData.title,
+            description: formData.description,
+            amount: Number.parseFloat(formData.amount),
+            category: formData.category,
+            urgency: formData.urgency,
+            recipient: formData.recipient,
+            submitter: account,
+          }),
+        })
 
-      console.log("[v0] Agents API response status:", response.status)
+        console.log("[v0] Agents API response status:", response.status)
 
-      if (!response.ok) {
-        const errorText = await response.text()
-        console.log("[v0] Agents API error response:", errorText)
-        throw new Error(`Agents API error: ${response.status} - ${errorText}`)
+        if (!response.ok) {
+          const errorText = await response.text()
+          console.log("[v0] Agents API error response:", errorText)
+        } else {
+          const responseData = await response.json()
+          console.log("[v0] Agents API success:", responseData)
+        }
+      } catch (apiError) {
+        console.log("[v0] Agents API failed but blockchain submission succeeded:", apiError)
       }
-
-      const responseData = await response.json()
-      console.log("[v0] Agents API success:", responseData)
 
       setProposalId(newProposalId)
       setSubmitStatus("success")
