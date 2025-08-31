@@ -1,0 +1,42 @@
+{
+  "name": "ai-governance-agents",
+  "version": "1.0.0",
+  "description": "Dynamic AI Agents for Decentralized Governance on Citrea",
+  "type": "module",
+  "main": "src/AgentManager.js",
+  "scripts": {
+    "start": "node src/AgentManager.js",
+    "demo": "node src/AgentManager.js demo",
+    "server": "node src/AgentManager.js server",
+    "test": "node simple-test.js",
+    "example": "node usage-example.js",
+    "api-example": "node usage-example.js api"
+  },
+  "dependencies": {
+    "ethers": "^6.8.0",
+    "groq-sdk": "^0.7.0",
+    "dotenv": "^16.3.1"
+  },
+  "devDependencies": {
+    "eslint": "^8.50.0"
+  },
+  "keywords": [
+    "ai",
+    "governance",
+    "blockchain",
+    "citrea",
+    "bitcoin",
+    "agents",
+    "dynamic",
+    "consensus"
+  ],
+  "author": "Prateush Sharma",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/prateushsharma/deliberation-agents-governance.git"
+  }
+}
