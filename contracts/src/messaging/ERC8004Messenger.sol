@@ -2,268 +2,319 @@
 pragma solidity ^0.8.19;
 
 /**
- * @title ERC8004Messenger
- * @dev Transparent messaging system for governance audit trails
- * @notice All AI agent decisions, consensus updates, and executions are recorded here
+ * @title ERC8004Messenger - Simple Standalone Version
+ * @dev Implements ERC-8004 for transparent AI governance communications
  */
 contract ERC8004Messenger {
+    // =============== STATE VARIABLES ===============
     
-    // Message types for different governance events
-    enum MessageType {
-        PROPOSAL_SUBMITTED,    // New proposal created
-        ANALYSIS_POSTED,       // AI agent posts analysis
-        CONSENSUS_UPDATE,      // Consensus percentage changes
-        EXECUTION_COMPLETE,    // Payment executed
-        CHALLENGE_POSTED,      // Community challenge to decision
-        AGENT_SLASHED         // Agent penalized for wrong decision
-    }
-    
-    // Core message structure
     struct Message {
-        uint256 id;            // Unique message ID
-        uint256 proposalId;    // Which proposal this relates to
-        address sender;        // Who posted this message
-        MessageType msgType;   // Type of message
-        string content;        // Human-readable content
-        string ipfsHash;       // Extended data on IPFS
-        uint256 timestamp;     // When message was posted
-        bytes32 parentHash;    // For threading/replies
-        uint256 blockNumber;   // Block number for verification
+        uint256 id;
+        uint256 conversationId;
+        address sender;
+        uint8 messageType;
+        string content;
+        string parentHash;
+        uint256 timestamp;
+        bytes32 messageHash;
     }
     
-    // Storage
-    mapping(uint256 => Message[]) public proposalThreads;  // proposalId => Message[]
-    mapping(uint256 => Message) public messages;           // messageId => Message
-    mapping(address => bool) public authorizedPosters;     // Who can post messages
+    address public owner;
+    uint256 public messageCounter;
     
-    uint256 public nextMessageId = 1;
-    address public governance;
+    // Conversation ID -> Array of messages
+    mapping(uint256 => Message[]) public conversations;
     
-    // Events
+    // Authorization for contracts to post messages
+    mapping(address => bool) public authorizedPosters;
+    
+    // Anti-spam measures
+    mapping(address => uint256) public userMessageCount;
+    mapping(address => uint256) public lastMessageTime;
+    uint256 public constant MESSAGE_COOLDOWN = 30 seconds;
+    uint256 public constant MAX_MESSAGES_PER_DAY = 100;
+    
+    // =============== EVENTS ===============
+    
     event MessagePosted(
+        uint256 indexed conversationId,
         uint256 indexed messageId,
-        uint256 indexed proposalId, 
         address indexed sender,
-        MessageType msgType,
-        string content
+        uint8 messageType,
+        bytes32 messageHash
     );
     
-    event AuthorizationChanged(address indexed poster, bool authorized);
+    event AuthorizedPosterSet(address indexed poster, bool authorized);
     
-    modifier onlyAuthorized() {
-        require(authorizedPosters[msg.sender] || msg.sender == governance, "Not authorized to post");
-        _;
-    }
-    
-    modifier onlyGovernance() {
-        require(msg.sender == governance, "Only governance");
-        _;
-    }
+    // =============== CONSTRUCTOR ===============
     
     constructor() {
-        governance = msg.sender;
-        authorizedPosters[msg.sender] = true;
+        owner = msg.sender;
     }
     
+    // =============== MODIFIERS ===============
+    
+    modifier onlyOwner() {
+        require(msg.sender == owner, "Only owner");
+        _;
+    }
+    
+    modifier rateLimited() {
+        // Skip rate limiting for authorized contracts
+        if (!authorizedPosters[msg.sender]) {
+            require(
+                block.timestamp >= lastMessageTime[msg.sender] + MESSAGE_COOLDOWN,
+                "Message cooldown period not met"
+            );
+            require(
+                userMessageCount[msg.sender] < MAX_MESSAGES_PER_DAY,
+                "Daily message limit exceeded"
+            );
+            
+            lastMessageTime[msg.sender] = block.timestamp;
+            userMessageCount[msg.sender]++;
+        }
+        _;
+    }
+    
+    // =============== CORE FUNCTIONS ===============
+    
     /**
-     * @dev Post a new message to a proposal thread
-     * @param proposalId Which proposal this message relates to
-     * @param msgType Type of message being posted
-     * @param content Human-readable content
-     * @param ipfsHash Hash of extended data stored on IPFS
-     * @param parentHash Hash of parent message (for threading)
+     * @dev Post a message to a conversation
      */
     function postMessage(
-        uint256 proposalId,
-        MessageType msgType,
-        string memory content,
-        string memory ipfsHash,
-        bytes32 parentHash
-    ) external onlyAuthorized returns (uint256 messageId) {
-        messageId = nextMessageId++;
+        uint256 conversationId,
+        uint8 messageType,
+        string calldata content,
+        string calldata parentHash
+    ) external rateLimited {
+        require(conversationId > 0, "Invalid conversation ID");
+        require(bytes(content).length > 0, "Content cannot be empty");
+        require(bytes(content).length <= 2000, "Content too long");
+        require(messageType <= 5, "Invalid message type");
         
+        // Create message hash for integrity
+        bytes32 messageHash = keccak256(abi.encodePacked(
+            conversationId,
+            msg.sender,
+            messageType,
+            content,
+            parentHash,
+            block.timestamp
+        ));
+        
+        // Create message
         Message memory newMessage = Message({
-            id: messageId,
-            proposalId: proposalId,
+            id: messageCounter,
+            conversationId: conversationId,
             sender: msg.sender,
-            msgType: msgType,
+            messageType: messageType,
             content: content,
-            ipfsHash: ipfsHash,
-            timestamp: block.timestamp,
             parentHash: parentHash,
-            blockNumber: block.number
+            timestamp: block.timestamp,
+            messageHash: messageHash
         });
         
         // Store message
-        messages[messageId] = newMessage;
-        proposalThreads[proposalId].push(newMessage);
+        conversations[conversationId].push(newMessage);
+        messageCounter++;
         
-        emit MessagePosted(messageId, proposalId, msg.sender, msgType, content);
-        
-        return messageId;
+        emit MessagePosted(
+            conversationId,
+            newMessage.id,
+            msg.sender,
+            messageType,
+            messageHash
+        );
     }
     
     /**
-     * @dev Get all messages for a specific proposal
-     * @param proposalId The proposal ID to get thread for
-     * @return Array of messages in chronological order
+     * @dev Get all messages in a conversation
      */
-    function getProposalThread(uint256 proposalId) external view returns (Message[] memory) {
-        return proposalThreads[proposalId];
+    function getConversationMessages(uint256 conversationId)
+        external view returns (Message[] memory)
+    {
+        return conversations[conversationId];
     }
     
     /**
-     * @dev Get a specific message by ID
-     * @param messageId The message ID
-     * @return The message struct
+     * @dev Get all messages for a proposal (alias for governance context)
      */
-    function getMessage(uint256 messageId) external view returns (Message memory) {
-        return messages[messageId];
+    function getProposalThread(uint256 proposalId) 
+        external 
+        view 
+        returns (Message[] memory) 
+    {
+        return conversations[proposalId];
+    }
+    
+    // =============== AUTHORIZATION FUNCTIONS ===============
+    
+    /**
+     * @dev Set authorized message posters (for ConsensusEngine and other contracts)
+     */
+    function setAuthorizedPoster(address poster, bool authorized) external onlyOwner {
+        require(poster != address(0), "Invalid poster address");
+        authorizedPosters[poster] = authorized;
+        emit AuthorizedPosterSet(poster, authorized);
     }
     
     /**
-     * @dev Get the latest N messages for a proposal
-     * @param proposalId The proposal ID
-     * @param count Number of recent messages to return
-     * @return Array of most recent messages
+     * @dev Check if address is authorized to post without rate limits
      */
-    function getLatestMessages(uint256 proposalId, uint256 count) 
-        external view returns (Message[] memory) {
-        Message[] storage thread = proposalThreads[proposalId];
-        uint256 threadLength = thread.length;
+    function isAuthorizedPoster(address poster) external view returns (bool) {
+        return authorizedPosters[poster];
+    }
+    
+    // =============== VIEW FUNCTIONS ===============
+    
+    /**
+     * @dev Get message count for a conversation
+     */
+    function getConversationMessageCount(uint256 conversationId) 
+        external 
+        view 
+        returns (uint256) 
+    {
+        return conversations[conversationId].length;
+    }
+    
+    /**
+     * @dev Get messages by type for a conversation
+     */
+    function getMessagesByType(uint256 conversationId, uint8 messageType)
+        external
+        view
+        returns (Message[] memory)
+    {
+        Message[] storage allMessages = conversations[conversationId];
         
-        if (threadLength == 0) {
+        // Count messages of the specified type
+        uint256 count = 0;
+        for (uint256 i = 0; i < allMessages.length; i++) {
+            if (allMessages[i].messageType == messageType) {
+                count++;
+            }
+        }
+        
+        // Create filtered array
+        Message[] memory filteredMessages = new Message[](count);
+        uint256 index = 0;
+        for (uint256 i = 0; i < allMessages.length; i++) {
+            if (allMessages[i].messageType == messageType) {
+                filteredMessages[index] = allMessages[i];
+                index++;
+            }
+        }
+        
+        return filteredMessages;
+    }
+    
+    /**
+     * @dev Get latest messages from a conversation
+     */
+    function getLatestMessages(uint256 conversationId, uint256 count)
+        external
+        view
+        returns (Message[] memory)
+    {
+        Message[] storage allMessages = conversations[conversationId];
+        uint256 totalMessages = allMessages.length;
+        
+        if (totalMessages == 0) {
             return new Message[](0);
         }
         
-        uint256 returnCount = count > threadLength ? threadLength : count;
-        Message[] memory latestMessages = new Message[](returnCount);
+        uint256 startIndex = totalMessages > count ? totalMessages - count : 0;
+        uint256 actualCount = totalMessages - startIndex;
         
-        for (uint256 i = 0; i < returnCount; i++) {
-            latestMessages[i] = thread[threadLength - returnCount + i];
+        Message[] memory latestMessages = new Message[](actualCount);
+        for (uint256 i = 0; i < actualCount; i++) {
+            latestMessages[i] = allMessages[startIndex + i];
         }
         
         return latestMessages;
     }
     
     /**
-     * @dev Get messages of specific type for a proposal
-     * @param proposalId The proposal ID
-     * @param msgType The message type to filter by
-     * @return Array of messages matching the type
+     * @dev Verify message integrity
      */
-    function getMessagesByType(uint256 proposalId, MessageType msgType) 
-        external view returns (Message[] memory) {
-        Message[] storage thread = proposalThreads[proposalId];
+    function verifyMessage(
+        uint256 conversationId,
+        address sender,
+        uint8 messageType,
+        string calldata content,
+        string calldata parentHash,
+        uint256 timestamp,
+        bytes32 providedHash
+    ) external pure returns (bool) {
+        bytes32 calculatedHash = keccak256(abi.encodePacked(
+            conversationId,
+            sender,
+            messageType,
+            content,
+            parentHash,
+            timestamp
+        ));
         
-        // Count matching messages first
-        uint256 matchingCount = 0;
-        for (uint256 i = 0; i < thread.length; i++) {
-            if (thread[i].msgType == msgType) {
-                matchingCount++;
-            }
-        }
-        
-        // Create array and populate
-        Message[] memory matchingMessages = new Message[](matchingCount);
-        uint256 currentIndex = 0;
-        
-        for (uint256 i = 0; i < thread.length; i++) {
-            if (thread[i].msgType == msgType) {
-                matchingMessages[currentIndex] = thread[i];
-                currentIndex++;
-            }
-        }
-        
-        return matchingMessages;
+        return calculatedHash == providedHash;
     }
     
     /**
-     * @dev Get thread statistics
-     * @param proposalId The proposal ID
-     * @return totalMessages Total number of messages
-     * @return uniquePosters Number of unique message posters
-     * @return lastActivity Timestamp of last message
+     * @dev Get message type descriptions
      */
-    function getThreadStats(uint256 proposalId) 
-        external view returns (uint256 totalMessages, uint256 uniquePosters, uint256 lastActivity) {
-        Message[] storage thread = proposalThreads[proposalId];
-        totalMessages = thread.length;
-        
-        if (totalMessages == 0) {
-            return (0, 0, 0);
-        }
-        
-        // Count unique posters
-        address[] memory posters = new address[](totalMessages);
-        uint256 uniqueCount = 0;
-        
-        for (uint256 i = 0; i < totalMessages; i++) {
-            address poster = thread[i].sender;
-            bool isUnique = true;
-            
-            for (uint256 j = 0; j < uniqueCount; j++) {
-                if (posters[j] == poster) {
-                    isUnique = false;
-                    break;
-                }
-            }
-            
-            if (isUnique) {
-                posters[uniqueCount] = poster;
-                uniqueCount++;
-            }
-        }
-        
-        uniquePosters = uniqueCount;
-        lastActivity = thread[totalMessages - 1].timestamp;
+    function getMessageTypeDescription(uint8 messageType) external pure returns (string memory) {
+        if (messageType == 0) return "PROPOSAL_SUBMITTED";
+        if (messageType == 1) return "ANALYSIS_POSTED";
+        if (messageType == 2) return "AGENT_UPDATE";
+        if (messageType == 3) return "CONSENSUS_UPDATE";
+        if (messageType == 4) return "EXECUTION_COMPLETE";
+        if (messageType == 5) return "CHALLENGE_POSTED";
+        return "UNKNOWN";
     }
     
     /**
-     * @dev Authorize or deauthorize an address to post messages
-     * @param poster Address to authorize/deauthorize
-     * @param authorized True to authorize, false to deauthorize
+     * @dev Get user's message statistics
      */
-    function setAuthorization(address poster, bool authorized) external onlyGovernance {
-        authorizedPosters[poster] = authorized;
-        emit AuthorizationChanged(poster, authorized);
+    function getUserStats(address user) external view returns (
+        uint256 messageCount,
+        uint256 lastMessage
+    ) {
+        return (userMessageCount[user], lastMessageTime[user]);
     }
     
     /**
-     * @dev Batch authorize multiple addresses
-     * @param posters Array of addresses to authorize
+     * @dev Get contract statistics
      */
-    function batchAuthorize(address[] calldata posters) external onlyGovernance {
-        for (uint256 i = 0; i < posters.length; i++) {
-            authorizedPosters[posters[i]] = true;
-            emit AuthorizationChanged(posters[i], true);
-        }
+    function getContractStats() external view returns (
+        uint256 totalMessages,
+        uint256 activeConversations
+    ) {
+        // Simple implementation - in production you'd track this more efficiently
+        return (messageCounter, 0); // activeConversations would need separate tracking
+    }
+    
+    // =============== ADMIN FUNCTIONS ===============
+    
+    /**
+     * @dev Reset user message count (admin emergency function)
+     */
+    function resetUserMessageCount(address user) external onlyOwner {
+        userMessageCount[user] = 0;
     }
     
     /**
-     * @dev Transfer governance to new address
-     * @param newGovernance New governance address
+     * @dev Emergency pause posting for a user (spam protection)
      */
-    function transferGovernance(address newGovernance) external onlyGovernance {
-        require(newGovernance != address(0), "Invalid governance address");
-        governance = newGovernance;
-        authorizedPosters[newGovernance] = true;
+    function pauseUser(address user) external onlyOwner {
+        userMessageCount[user] = MAX_MESSAGES_PER_DAY;
     }
     
     /**
-     * @dev Emergency function to clear a proposal thread (governance only)
-     * @param proposalId Proposal ID to clear
+     * @dev Transfer ownership
      */
-    function emergencyClearThread(uint256 proposalId) external onlyGovernance {
-        delete proposalThreads[proposalId];
-    }
-    
-    /**
-     * @dev View function to check if address can post
-     * @param poster Address to check
-     * @return True if authorized to post
-     */
-    function canPost(address poster) external view returns (bool) {
-        return authorizedPosters[poster] || poster == governance;
+    function transferOwnership(address newOwner) external onlyOwner {
+        require(newOwner != address(0), "Invalid new owner");
+        owner = newOwner;
     }
 }

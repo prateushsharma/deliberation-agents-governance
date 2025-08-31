@@ -1,532 +1,414 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
-
-import "@openzeppelin/contracts/access/Ownable.sol";
-import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
-import "@openzeppelin/contracts/security/Pausable.sol";
-
-interface IERC8004Messenger {
-    enum MessageType {
-        PROPOSAL_SUBMITTED,
-        ANALYSIS_POSTED,
-        CONSENSUS_UPDATE,
-        EXECUTION_COMPLETE,
-        CHALLENGE_POSTED,
-        AGENT_SLASHED
-    }
-    
-    function postMessage(
-        uint256 proposalId,
-        MessageType msgType,
-        string memory content,
-        string memory ipfsHash,
-        bytes32 parentHash
-    ) external;
-}
+pragma solidity ^0.8.19;
 
 /**
- * @title AIAgentStaking
- * @dev Staking contract for AI agents participating in governance
- * @notice Agents must stake native cBTC to participate in proposal analysis
+ * @title AIAgentStaking - Remix Ready Version
+ * @dev Manages AI agent participation and economic incentives for governance
  */
-contract AIAgentStaking is Ownable, ReentrancyGuard, Pausable {
+contract AIAgentStaking {
+    // =============== STATE VARIABLES ===============
     
-    // =============================================================================
-    // CONSTANTS & VARIABLES
-    // =============================================================================
+    address public messenger;
+    address public owner;
+    uint256 public minimumStake = 0.00001 ether; // 0.00001 cBTC minimum
     
-    uint256 public constant MINIMUM_STAKE = 0.00001 ether; // 0.00001 cBTC
-    uint256 public constant UNSTAKE_COOLDOWN = 7 days;
-    uint256 public constant SLASH_COOLDOWN = 30 days;
-    
-    IERC8004Messenger public immutable erc8004Messenger;
-    
-    // Agent specialization types
-    enum AgentType {
-        RISK,       // 0 - Risk Assessment
-        FINANCIAL,  // 1 - Financial Analysis  
-        COMMUNITY,  // 2 - Community Impact
-        TECHNICAL   // 3 - Technical Feasibility
-    }
-    
-    // Agent information struct
-    struct AgentInfo {
+    struct Agent {
         bool isRegistered;
-        AgentType agentType;
-        uint256 stakedAmount;
-        uint256 lastStakeTime;
-        uint256 unstakeRequestTime;
+        uint256 totalStaked;
+        uint256 successfulAnalyses;
         uint256 totalAnalyses;
-        uint256 correctPredictions;
-        uint256 accuracyScore; // Basis points (10000 = 100%)
-        bool isSlashed;
-        uint256 slashEndTime;
-        string metadataURI; // IPFS hash for agent details
+        string specialization;
+        string ipfsProfile;
     }
     
-    // Proposal analysis struct
-    struct Analysis {
-        address agent;
-        uint256 proposalId;
-        int8 recommendation; // -1 = reject, 0 = neutral, 1 = approve
-        uint256 confidence; // Basis points (10000 = 100%)
+    struct AgentAnalysis {
+        int8 recommendation; // -1: reject, 0: neutral, 1: approve
+        uint256 confidence; // 0-100
+        uint256 stakeAmount; // Amount staked for this analysis
+        string ipfsHash; // Detailed analysis on IPFS
         uint256 timestamp;
-        string ipfsHash;
-        bool verified;
+        bool submitted;
     }
     
-    // =============================================================================
-    // STATE VARIABLES
-    // =============================================================================
-    
-    mapping(address => AgentInfo) public agents;
-    mapping(uint256 => Analysis[]) public proposalAnalyses;
-    mapping(uint256 => mapping(address => bool)) public hasAnalyzed;
-    
+    mapping(address => Agent) public agents;
+    mapping(uint256 => mapping(address => AgentAnalysis)) public agentAnalyses;
+    mapping(address => uint256) public agentStakes;
     address[] public registeredAgents;
-    uint256 public totalStaked;
-    uint256 public rewardPool;
     
-    // Performance tracking
-    mapping(address => uint256[]) public agentProposalHistory;
+    // Track which agents participated in each proposal
+    mapping(uint256 => address[]) public proposalAgents;
+    mapping(uint256 => mapping(address => bool)) public hasSubmittedAnalysis;
     
-    // =============================================================================
-    // EVENTS
-    // =============================================================================
+    // Authorization for ConsensusEngine
+    mapping(address => bool) public authorizedConsensus;
     
-    event AgentRegistered(address indexed agent, AgentType agentType, string metadataURI);
-    event AgentStaked(address indexed agent, uint256 amount, uint256 totalStaked);
-    event AgentUnstakeRequested(address indexed agent, uint256 requestTime);
-    event AgentUnstaked(address indexed agent, uint256 amount);
-    event AnalysisSubmitted(address indexed agent, uint256 indexed proposalId, int8 recommendation, uint256 confidence);
+    // =============== EVENTS ===============
+    
+    event AgentRegistered(address indexed agent, uint256 stakeAmount, string specialization);
+    event AnalysisSubmitted(
+        uint256 indexed proposalId, 
+        address indexed agent, 
+        int8 recommendation, 
+        uint256 confidence,
+        string ipfsHash
+    );
     event AgentSlashed(address indexed agent, uint256 amount, string reason);
     event AgentRewarded(address indexed agent, uint256 amount);
-    event AccuracyUpdated(address indexed agent, uint256 newAccuracy);
+    event ConsensusEngineAuthorized(address indexed consensusEngine);
     
-    // =============================================================================
-    // CONSTRUCTOR
-    // =============================================================================
+    // =============== CONSTRUCTOR ===============
     
-    constructor(address _erc8004Messenger, address initialOwner) 
-        Ownable(initialOwner) 
-    {
-        erc8004Messenger = IERC8004Messenger(_erc8004Messenger);
+    constructor(address _messenger) {
+        messenger = _messenger;
+        owner = msg.sender;
     }
     
-    // =============================================================================
-    // MODIFIERS
-    // =============================================================================
+    // =============== MODIFIERS ===============
     
-    modifier onlyStakedAgent() {
+    modifier onlyOwner() {
+        require(msg.sender == owner, "Only owner");
+        _;
+    }
+    
+    modifier onlyRegisteredAgent() {
         require(agents[msg.sender].isRegistered, "Agent not registered");
-        require(agents[msg.sender].stakedAmount >= MINIMUM_STAKE, "Insufficient stake");
-        require(!agents[msg.sender].isSlashed || block.timestamp > agents[msg.sender].slashEndTime, "Agent is slashed");
         _;
     }
     
-    modifier validProposal(uint256 proposalId) {
-        require(proposalId > 0, "Invalid proposal ID");
-        _;
-    }
-    
-    // =============================================================================
-    // AGENT REGISTRATION & STAKING
-    // =============================================================================
+    // =============== CORE FUNCTIONS ===============
     
     /**
-     * @dev Register as an AI agent and stake cBTC
-     * @param agentType The specialization of this agent
-     * @param metadataURI IPFS hash containing agent details
+     * @dev Register as an AI agent with minimum stake
      */
-    function stakeAsAgent(AgentType agentType, string calldata metadataURI) 
-        external 
-        payable 
-        nonReentrant 
-        whenNotPaused 
-    {
-        require(msg.value >= MINIMUM_STAKE, "Stake below minimum");
+    function registerAgent(
+        string calldata specialization,
+        string calldata ipfsProfile
+    ) external payable {
+        require(msg.value >= minimumStake, "Insufficient stake");
         require(!agents[msg.sender].isRegistered, "Agent already registered");
-        require(bytes(metadataURI).length > 0, "Metadata URI required");
+        require(bytes(specialization).length > 0, "Specialization required");
         
-        agents[msg.sender] = AgentInfo({
+        agents[msg.sender] = Agent({
             isRegistered: true,
-            agentType: agentType,
-            stakedAmount: msg.value,
-            lastStakeTime: block.timestamp,
-            unstakeRequestTime: 0,
+            totalStaked: msg.value,
+            successfulAnalyses: 0,
             totalAnalyses: 0,
-            correctPredictions: 0,
-            accuracyScore: 5000, // Start at 50%
-            isSlashed: false,
-            slashEndTime: 0,
-            metadataURI: metadataURI
+            specialization: specialization,
+            ipfsProfile: ipfsProfile
         });
         
+        agentStakes[msg.sender] = msg.value;
         registeredAgents.push(msg.sender);
-        totalStaked += msg.value;
         
-        emit AgentRegistered(msg.sender, agentType, metadataURI);
-        emit AgentStaked(msg.sender, msg.value, agents[msg.sender].stakedAmount);
+        emit AgentRegistered(msg.sender, msg.value, specialization);
     }
     
     /**
-     * @dev Add more stake to existing agent position
+     * @dev Add more stake to increase influence
      */
-    function addStake() 
-        external 
-        payable 
-        nonReentrant 
-        whenNotPaused 
-    {
-        require(agents[msg.sender].isRegistered, "Agent not registered");
-        require(msg.value > 0, "Must stake positive amount");
-        require(agents[msg.sender].unstakeRequestTime == 0, "Unstake request pending");
+    function addStake() external payable onlyRegisteredAgent {
+        require(msg.value > 0, "Must stake something");
         
-        agents[msg.sender].stakedAmount += msg.value;
-        agents[msg.sender].lastStakeTime = block.timestamp;
-        totalStaked += msg.value;
-        
-        emit AgentStaked(msg.sender, msg.value, agents[msg.sender].stakedAmount);
+        agents[msg.sender].totalStaked += msg.value;
+        agentStakes[msg.sender] += msg.value;
     }
-    
-    /**
-     * @dev Request to unstake (starts cooldown period)
-     */
-    function requestUnstake() 
-        external 
-        nonReentrant 
-    {
-        require(agents[msg.sender].isRegistered, "Agent not registered");
-        require(agents[msg.sender].unstakeRequestTime == 0, "Unstake already requested");
-        require(agents[msg.sender].stakedAmount > 0, "No stake to withdraw");
-        
-        agents[msg.sender].unstakeRequestTime = block.timestamp;
-        
-        emit AgentUnstakeRequested(msg.sender, block.timestamp);
-    }
-    
-    /**
-     * @dev Complete unstaking after cooldown period
-     */
-    function unstake() 
-        external 
-        nonReentrant 
-    {
-        require(agents[msg.sender].isRegistered, "Agent not registered");
-        require(agents[msg.sender].unstakeRequestTime > 0, "No unstake request");
-        require(
-            block.timestamp >= agents[msg.sender].unstakeRequestTime + UNSTAKE_COOLDOWN,
-            "Cooldown period not complete"
-        );
-        
-        uint256 amount = agents[msg.sender].stakedAmount;
-        require(amount > 0, "No stake to withdraw");
-        
-        // Update state before transfer
-        agents[msg.sender].stakedAmount = 0;
-        agents[msg.sender].unstakeRequestTime = 0;
-        agents[msg.sender].isRegistered = false;
-        totalStaked -= amount;
-        
-        // Remove from registered agents array
-        _removeFromRegisteredAgents(msg.sender);
-        
-        // Transfer cBTC
-        (bool success, ) = payable(msg.sender).call{value: amount}("");
-        require(success, "Transfer failed");
-        
-        emit AgentUnstaked(msg.sender, amount);
-    }
-    
-    // =============================================================================
-    // ANALYSIS SUBMISSION
-    // =============================================================================
     
     /**
      * @dev Submit analysis for a proposal
-     * @param proposalId The proposal being analyzed
-     * @param recommendation Agent's recommendation (-1, 0, 1)
-     * @param confidence Confidence level in basis points (0-10000)
-     * @param ipfsHash IPFS hash of detailed analysis
      */
     function submitAnalysis(
         uint256 proposalId,
         int8 recommendation,
         uint256 confidence,
         string calldata ipfsHash
-    ) 
-        external 
-        onlyStakedAgent 
-        validProposal(proposalId)
-        nonReentrant 
-        whenNotPaused 
-    {
+    ) external onlyRegisteredAgent {
+        require(proposalId > 0, "Invalid proposal ID");
         require(recommendation >= -1 && recommendation <= 1, "Invalid recommendation");
-        require(confidence <= 10000, "Confidence exceeds maximum");
-        require(!hasAnalyzed[proposalId][msg.sender], "Already analyzed this proposal");
+        require(confidence <= 100, "Invalid confidence score");
         require(bytes(ipfsHash).length > 0, "IPFS hash required");
+        require(!agentAnalyses[proposalId][msg.sender].submitted, "Analysis already submitted");
+        require(agentStakes[msg.sender] >= minimumStake, "Insufficient stake");
         
-        // Create analysis record
-        Analysis memory analysis = Analysis({
-            agent: msg.sender,
-            proposalId: proposalId,
+        // Store analysis
+        agentAnalyses[proposalId][msg.sender] = AgentAnalysis({
             recommendation: recommendation,
             confidence: confidence,
-            timestamp: block.timestamp,
+            stakeAmount: agentStakes[msg.sender], // Current stake at time of analysis
             ipfsHash: ipfsHash,
-            verified: false
+            timestamp: block.timestamp,
+            submitted: true
         });
         
-        proposalAnalyses[proposalId].push(analysis);
-        hasAnalyzed[proposalId][msg.sender] = true;
-        agents[msg.sender].totalAnalyses++;
-        agentProposalHistory[msg.sender].push(proposalId);
+        // Track agent for this proposal
+        if (!hasSubmittedAnalysis[proposalId][msg.sender]) {
+            proposalAgents[proposalId].push(msg.sender);
+            hasSubmittedAnalysis[proposalId][msg.sender] = true;
+        }
         
-        // Post to ERC8004Messenger for transparency
-        string memory content = string(abi.encodePacked(
-            "Analysis: ", 
+        // Update agent stats
+        agents[msg.sender].totalAnalyses++;
+        
+        // Try to post analysis to messenger (with error handling)
+        if (messenger != address(0)) {
+            try this.postAnalysisToMessenger(proposalId, msg.sender, recommendation, confidence) {
+                // Success
+            } catch {
+                // Continue even if messaging fails
+            }
+        }
+        
+        emit AnalysisSubmitted(proposalId, msg.sender, recommendation, confidence, ipfsHash);
+    }
+    
+    /**
+     * @dev External function to post analysis to messenger (for try-catch)
+     */
+    function postAnalysisToMessenger(
+        uint256 proposalId,
+        address agent,
+        int8 recommendation,
+        uint256 confidence
+    ) external {
+        require(msg.sender == address(this), "Internal only");
+        
+        string memory analysisMessage = string(abi.encodePacked(
+            agents[agent].specialization,
+            " Agent: ",
             recommendation == 1 ? "APPROVE" : recommendation == -1 ? "REJECT" : "NEUTRAL",
-            " | Confidence: ", _toString(confidence / 100), "% | IPFS: ", ipfsHash
+            " (", toString(confidence), "% confidence)"
         ));
         
-        erc8004Messenger.postMessage(
-            proposalId,
-            IERC8004Messenger.MessageType.ANALYSIS_POSTED,
-            content,
-            ipfsHash, // Use the analysis IPFS hash
-            bytes32(0) // No parent for agent analyses
+        // Call external messenger contract
+        (bool success, ) = messenger.call(
+            abi.encodeWithSignature(
+                "postMessage(uint256,uint8,string,string)",
+                proposalId,
+                1, // ANALYSIS_POSTED message type
+                analysisMessage,
+                ""
+            )
         );
         
-        emit AnalysisSubmitted(msg.sender, proposalId, recommendation, confidence);
+        // Don't revert if messenger call fails
     }
     
-    // =============================================================================
-    // PERFORMANCE & REWARDS
-    // =============================================================================
+    // =============== CONSENSUS ENGINE INTEGRATION ===============
     
     /**
-     * @dev Update agent accuracy based on proposal outcome
-     * @param proposalId The completed proposal
-     * @param actualOutcome The actual result (1 = approved, -1 = rejected)
+     * @dev Get all agents who submitted analysis for a proposal
+     * Required by ConsensusEngine to calculate consensus
      */
-    function updateAgentAccuracy(uint256 proposalId, int8 actualOutcome) 
+    function getProposalAgents(uint256 proposalId) 
         external 
-        onlyOwner 
+        view 
+        returns (address[] memory) 
     {
-        require(actualOutcome == 1 || actualOutcome == -1, "Invalid outcome");
+        return proposalAgents[proposalId];
+    }
+    
+    /**
+     * @dev Get detailed analysis from specific agent for proposal
+     * Required by ConsensusEngine for weighted voting
+     */
+    function getAgentAnalysis(uint256 proposalId, address agent)
+        external
+        view
+        returns (
+            int8 recommendation,
+            uint256 confidence,
+            uint256 stakeAmount,
+            string memory ipfsHash,
+            uint256 timestamp
+        )
+    {
+        AgentAnalysis storage analysis = agentAnalyses[proposalId][agent];
+        return (
+            analysis.recommendation,
+            analysis.confidence,
+            analysis.stakeAmount,
+            analysis.ipfsHash,
+            analysis.timestamp
+        );
+    }
+    
+    /**
+     * @dev Set authorized consensus engine (only owner)
+     */
+    function setAuthorizedConsensus(address consensusEngine) external onlyOwner {
+        require(consensusEngine != address(0), "Invalid consensus engine address");
+        authorizedConsensus[consensusEngine] = true;
+        emit ConsensusEngineAuthorized(consensusEngine);
+    }
+    
+    /**
+     * @dev Get number of agents who analyzed a proposal
+     */
+    function getProposalAgentCount(uint256 proposalId) external view returns (uint256) {
+        return proposalAgents[proposalId].length;
+    }
+    
+    /**
+     * @dev Check if agent has submitted analysis for proposal
+     */
+    function hasAgentAnalyzed(uint256 proposalId, address agent) external view returns (bool) {
+        return hasSubmittedAnalysis[proposalId][agent];
+    }
+    
+    /**
+     * @dev Get all analyses for a proposal (for frontend)
+     */
+    function getProposalAnalyses(uint256 proposalId) 
+        external 
+        view 
+        returns (
+            address[] memory agentAddresses,
+            int8[] memory recommendations,
+            uint256[] memory confidences,
+            string[] memory specializations
+        ) 
+    {
+        address[] memory agents_list = proposalAgents[proposalId];
+        uint256 count = agents_list.length;
         
-        Analysis[] memory analyses = proposalAnalyses[proposalId];
+        agentAddresses = new address[](count);
+        recommendations = new int8[](count);
+        confidences = new uint256[](count);
+        specializations = new string[](count);
         
-        for (uint256 i = 0; i < analyses.length; i++) {
-            Analysis storage analysis = proposalAnalyses[proposalId][i];
-            address agent = analysis.agent;
+        for (uint256 i = 0; i < count; i++) {
+            address agent = agents_list[i];
+            AgentAnalysis storage analysis = agentAnalyses[proposalId][agent];
             
-            if (!agents[agent].isRegistered) continue;
-            
-            // Mark as verified
-            analysis.verified = true;
-            
-            // Check if prediction was correct
-            bool isCorrect = (analysis.recommendation == actualOutcome) || 
-                           (analysis.recommendation == 0); // Neutral is always "safe"
-            
-            if (isCorrect) {
-                agents[agent].correctPredictions++;
-            }
-            
-            // Update accuracy score (weighted moving average)
-            uint256 newAccuracy = (agents[agent].correctPredictions * 10000) / agents[agent].totalAnalyses;
-            agents[agent].accuracyScore = newAccuracy;
-            
-            emit AccuracyUpdated(agent, newAccuracy);
+            agentAddresses[i] = agent;
+            recommendations[i] = analysis.recommendation;
+            confidences[i] = analysis.confidence;
+            specializations[i] = agents[agent].specialization;
         }
+        
+        return (agentAddresses, recommendations, confidences, specializations);
+    }
+    
+    // =============== AGENT MANAGEMENT ===============
+    
+    /**
+     * @dev Slash an agent for poor performance
+     */
+    function slashAgent(
+        address agent,
+        uint256 amount,
+        string calldata reason
+    ) external onlyOwner {
+        require(agents[agent].isRegistered, "Agent not registered");
+        require(agentStakes[agent] >= amount, "Insufficient stake to slash");
+        
+        agentStakes[agent] -= amount;
+        agents[agent].totalStaked -= amount;
+        
+        emit AgentSlashed(agent, amount, reason);
     }
     
     /**
-     * @dev Reward agent for accurate analysis
+     * @dev Reward an agent for accurate analysis
      */
-    function rewardAgent(address agent, uint256 amount) 
-        external 
-        onlyOwner 
-        nonReentrant 
-    {
+    function rewardAgent(address agent) external payable onlyOwner {
         require(agents[agent].isRegistered, "Agent not registered");
-        require(amount <= rewardPool, "Insufficient reward pool");
+        require(msg.value > 0, "No reward sent");
         
-        rewardPool -= amount;
+        agents[agent].successfulAnalyses++;
         
-        (bool success, ) = payable(agent).call{value: amount}("");
+        (bool success, ) = agent.call{value: msg.value}("");
         require(success, "Reward transfer failed");
         
-        emit AgentRewarded(agent, amount);
+        emit AgentRewarded(agent, msg.value);
     }
     
-    /**
-     * @dev Slash agent for malicious behavior
-     */
-    function slashAgent(address agent, uint256 slashAmount, string calldata reason) 
-        external 
-        onlyOwner 
-        nonReentrant 
-    {
-        require(agents[agent].isRegistered, "Agent not registered");
-        require(slashAmount <= agents[agent].stakedAmount, "Slash exceeds stake");
-        
-        agents[agent].stakedAmount -= slashAmount;
-        agents[agent].isSlashed = true;
-        agents[agent].slashEndTime = block.timestamp + SLASH_COOLDOWN;
-        totalStaked -= slashAmount;
-        rewardPool += slashAmount; // Slashed funds go to reward pool
-        
-        emit AgentSlashed(agent, slashAmount, reason);
-    }
-    
-    // =============================================================================
-    // VIEW FUNCTIONS
-    // =============================================================================
-    
-    /**
-     * @dev Check if address is authorized to post messages
-     */
-    function isAuthorizedAgent(address agent) external view returns (bool) {
-        return agents[agent].isRegistered && 
-               agents[agent].stakedAmount >= MINIMUM_STAKE &&
-               (!agents[agent].isSlashed || block.timestamp > agents[agent].slashEndTime);
-    }
+    // =============== VIEW FUNCTIONS ===============
     
     /**
      * @dev Get agent information
      */
-    function getAgentInfo(address agent) external view returns (AgentInfo memory) {
-        return agents[agent];
+    function getAgent(address agentAddress) external view returns (
+        bool isRegistered,
+        uint256 totalStaked,
+        uint256 successfulAnalyses,
+        uint256 totalAnalyses,
+        string memory specialization,
+        string memory ipfsProfile
+    ) {
+        Agent storage agent = agents[agentAddress];
+        return (
+            agent.isRegistered,
+            agent.totalStaked,
+            agent.successfulAnalyses,
+            agent.totalAnalyses,
+            agent.specialization,
+            agent.ipfsProfile
+        );
     }
     
     /**
-     * @dev Get all analyses for a proposal
+     * @dev Get all registered agents
      */
-    function getProposalAnalyses(uint256 proposalId) external view returns (Analysis[] memory) {
-        return proposalAnalyses[proposalId];
+    function getAllAgents() external view returns (address[] memory) {
+        return registeredAgents;
     }
     
     /**
-     * @dev Get agent's analysis history
+     * @dev Get agent's success rate
      */
-    function getAgentHistory(address agent) external view returns (uint256[] memory) {
-        return agentProposalHistory[agent];
+    function getAgentSuccessRate(address agentAddress) external view returns (uint256) {
+        Agent storage agent = agents[agentAddress];
+        if (agent.totalAnalyses == 0) return 0;
+        return (agent.successfulAnalyses * 10000) / agent.totalAnalyses; // In basis points
     }
     
     /**
-     * @dev Get total number of registered agents
+     * @dev Get contract balance
      */
-    function getRegisteredAgentsCount() external view returns (uint256) {
-        return registeredAgents.length;
+    function getContractBalance() external view returns (uint256) {
+        return address(this).balance;
+    }
+    
+    // =============== ADMIN FUNCTIONS ===============
+    
+    /**
+     * @dev Update minimum stake requirement
+     */
+    function updateMinimumStake(uint256 newMinimum) external onlyOwner {
+        minimumStake = newMinimum;
     }
     
     /**
-     * @dev Get agent by index
+     * @dev Emergency withdrawal (only owner)
      */
-    function getAgentByIndex(uint256 index) external view returns (address) {
-        require(index < registeredAgents.length, "Index out of bounds");
-        return registeredAgents[index];
+    function emergencyWithdraw(uint256 amount) external onlyOwner {
+        require(amount <= address(this).balance, "Insufficient balance");
+        (bool success, ) = owner.call{value: amount}("");
+        require(success, "Withdrawal failed");
     }
     
-    /**
-     * @dev Calculate agent influence weight based on stake and accuracy
-     */
-    function getAgentWeight(address agent) external view returns (uint256) {
-        if (!agents[agent].isRegistered || agents[agent].stakedAmount < MINIMUM_STAKE) {
-            return 0;
-        }
+    // =============== UTILITY FUNCTIONS ===============
+    
+    function toString(uint256 value) internal pure returns (string memory) {
+        if (value == 0) return "0";
         
-        uint256 stakeWeight = agents[agent].stakedAmount;
-        uint256 accuracyMultiplier = agents[agent].accuracyScore; // Already in basis points
-        
-        // Weight = stake * (accuracy / 100) 
-        // This gives more weight to both higher stakes and higher accuracy
-        return (stakeWeight * accuracyMultiplier) / 10000;
-    }
-    
-    // =============================================================================
-    // ADMIN FUNCTIONS
-    // =============================================================================
-    
-    /**
-     * @dev Add funds to reward pool
-     */
-    function addToRewardPool() external payable onlyOwner {
-        rewardPool += msg.value;
-    }
-    
-    /**
-     * @dev Emergency pause
-     */
-    function pause() external onlyOwner {
-        _pause();
-    }
-    
-    /**
-     * @dev Unpause
-     */
-    function unpause() external onlyOwner {
-        _unpause();
-    }
-    
-    /**
-     * @dev Emergency withdraw (only if paused)
-     */
-    function emergencyWithdraw() external onlyOwner whenPaused {
-        uint256 balance = address(this).balance;
-        (bool success, ) = payable(owner()).call{value: balance}("");
-        require(success, "Emergency withdraw failed");
-    }
-    
-    // =============================================================================
-    // INTERNAL FUNCTIONS
-    // =============================================================================
-    
-    /**
-     * @dev Remove agent from registered agents array
-     */
-    function _removeFromRegisteredAgents(address agent) internal {
-        for (uint256 i = 0; i < registeredAgents.length; i++) {
-            if (registeredAgents[i] == agent) {
-                registeredAgents[i] = registeredAgents[registeredAgents.length - 1];
-                registeredAgents.pop();
-                break;
-            }
-        }
-    }
-    
-    /**
-     * @dev Convert uint to string
-     */
-    function _toString(uint256 value) internal pure returns (string memory) {
-        if (value == 0) {
-            return "0";
-        }
         uint256 temp = value;
         uint256 digits;
         while (temp != 0) {
             digits++;
             temp /= 10;
         }
+        
         bytes memory buffer = new bytes(digits);
         while (value != 0) {
             digits -= 1;
             buffer[digits] = bytes1(uint8(48 + uint256(value % 10)));
             value /= 10;
         }
+        
         return string(buffer);
     }
     
-    // =============================================================================
-    // RECEIVE FUNCTION
-    // =============================================================================
-    
-    /**
-     * @dev Accept cBTC deposits for reward pool
-     */
-    receive() external payable {
-        rewardPool += msg.value;
-    }
+    // Allow contract to receive cBTC
+    receive() external payable {}
 }
