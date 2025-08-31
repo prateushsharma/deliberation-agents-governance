@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Progress } from "@/components/ui/progress"
 import { Separator } from "@/components/ui/separator"
+import { AgentLogs } from "@/components/agent-logs"
 import {
   ArrowLeft,
   Bitcoin,
@@ -22,6 +23,7 @@ import {
   CheckCircle,
   XCircle,
   Clock,
+  Activity,
 } from "lucide-react"
 import Link from "next/link"
 
@@ -229,6 +231,22 @@ export function ProposalDetail({ proposalId }: Props) {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
         {/* Main Content */}
         <div className="lg:col-span-2 space-y-6">
+          {/* Live Agent Communication */}
+          <Card className="bg-slate-800/50 border-slate-700">
+            <CardHeader>
+              <CardTitle className="text-white flex items-center gap-2">
+                <Activity className="h-5 w-5 text-cyan-400" />
+                Live Agent Communication
+              </CardTitle>
+              <CardDescription className="text-slate-400">
+                Real-time ERC-8004 messaging for this proposal on Citrea
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <AgentLogs proposalId={proposal.id.toString()} className="border-0 bg-transparent p-0" />
+            </CardContent>
+          </Card>
+
           {/* AI Agent Analyses */}
           <Card className="bg-slate-800/50 border-slate-700">
             <CardHeader>

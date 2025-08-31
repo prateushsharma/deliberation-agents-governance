@@ -48,13 +48,15 @@ export function TechnicalSpecs() {
               </div>
 
               <div className="bg-slate-700/50 rounded-lg p-4">
-                <h4 className="text-white font-semibold mb-2">ERC8004Messenger.sol</h4>
+                <h4 className="text-white font-semibold mb-2">ERC-8004 Messenger</h4>
                 <p className="text-slate-300 text-sm mb-3">
-                  Immutable audit trail for complete transparency of all AI decisions and reasoning.
+                  Revolutionary ERC-8004 messaging protocol enables secure agent-to-agent communication on Citrea,
+                  creating an immutable audit trail of all AI decisions and inter-agent discussions.
                 </p>
                 <div className="flex flex-wrap gap-2">
                   <span className="px-2 py-1 bg-green-500/20 text-green-300 text-xs rounded">postMessage()</span>
                   <span className="px-2 py-1 bg-green-500/20 text-green-300 text-xs rounded">getThread()</span>
+                  <span className="px-2 py-1 bg-cyan-500/20 text-cyan-300 text-xs rounded">agentComm()</span>
                 </div>
               </div>
             </div>
@@ -155,7 +157,7 @@ export function TechnicalSpecs() {
               </div>
               <div className="flex justify-between">
                 <span className="text-slate-400">Transparency</span>
-                <span className="text-green-400">100% Auditable</span>
+                <span className="text-green-400">ERC-8004 Auditable</span>
               </div>
             </div>
           </div>

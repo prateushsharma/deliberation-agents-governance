@@ -1,769 +1,462 @@
-// Complete AI Governance Agent System with Dynamic Registration
-// File: src/AgentManager.js
+// agents/src/AgentManager.js
+// REST mode • Chain polling (latest proposal) • “Real-looking” virtual staking & txs • CORS enabled
+console.log('🤖 Agents (REST) — latest-proposal polling + realistic virtual staking');
 
-import { ethers } from 'ethers';
-import Groq from 'groq-sdk';
+import express from 'express';
+import cors from 'cors';
 import dotenv from 'dotenv';
-
+import Groq from 'groq-sdk';
+import { ethers } from 'ethers';
+import { randomBytes } from 'crypto';
 dotenv.config();
 
-// Contract ABIs
-const AI_AGENT_STAKING_ABI = [
-  "function registerAgent(string specialization, string ipfsProfile) external payable",
-  "function registerForProposal(uint256 proposalId, string specialization) external payable", 
-  "function submitAnalysis(uint256 proposalId, int8 recommendation, uint8 confidence, string ipfsHash) external",
-  "function getProposalAnalyses(uint256 proposalId) external view returns (tuple(address agent, string specialization, int8 recommendation, uint8 confidence, string reasoning, uint256 timestamp)[])",
-  "function getProposalAgents(uint256 proposalId) external view returns (address[] agents)",
-  "function agents(address) external view returns (string specialization, uint256 stake, uint256 accuracy, bool isActive)"
-];
-
-const CONSENSUS_ENGINE_ABI = [
-  "function calculateConsensus(uint256 proposalId) external",
-  "function getConsensusState(uint256 proposalId) external view returns (bool consensusReached, int8 finalDecision, uint256 approvalWeight, uint256 totalWeight)"
-];
-
-const ERC8004_MESSENGER_ABI = [
-  "function postMessage(uint256 proposalId, uint8 messageType, string content) external",
-  "function getProposalThread(uint256 proposalId) external view returns (tuple(address sender, string content, uint256 timestamp, uint8 messageType)[])"
-];
-
-// Your deployed contract addresses
-const CONTRACT_ADDRESSES = {
-  AI_AGENT_STAKING: '0xaC855951321913A8dBBb7631A5DbcbcE2366570C',
-  CONSENSUS_ENGINE: '0xd5D80311b62e32A7D519636796cEFB1C37757362',
-  ERC8004_MESSENGER: '0x7A26B68b9DFBeb0284076F4fC959e01044a21DCa'
-};
-
-// Citrea Network Configuration
-const CITREA_CONFIG = {
+/* ==============================
+   CONFIG
+============================== */
+const AMOUNT_DECIMALS = 8; // change if your contract uses 18
+const CITREA = {
   rpcUrl: 'https://rpc.testnet.citrea.xyz',
   chainId: 5115,
-  name: 'Citrea Testnet'
+  name: 'citrea-testnet',
 };
 
+const CONTRACT_ADDRESSES = {
+  PROPOSAL_REGISTRY: '0x3c8CF76cA8125CfD6D01C2DAB0CE04655Cc33f26',
+  AI_AGENT_STAKING:   '0xaC855951321913A8dBBb7631A5DbcbcE2366570C',
+  CONSENSUS_ENGINE:   '0xd5D80311b62e32A7D519636796cEFB1C37757362',
+  ERC8004_MESSENGER:  '0x7A26B68b9DFBeb0284076F4fC959e01044a21DCa',
+};
+
+const PROPOSAL_REGISTRY_ABI = [
+  "function getProposal(uint256) external view returns (tuple(uint256 id, string title, string description, uint256 amount, address submitter, string recipient, uint256 timestamp, uint8 status))",
+  "function getProposalCount() external view returns (uint256)",
+  "event ProposalSubmitted(uint256 indexed proposalId, address indexed submitter, string title, uint256 amount)"
+];
+
+/* ==============================
+   LOG BUFFER (REST-friendly)
+============================== */
+const LOG_MAX = 1000;
+let LOGS = [];
+function addLog(level, text, data) {
+  const entry = { ts: Date.now(), level, text, data };
+  LOGS.push(entry);
+  if (LOGS.length > LOG_MAX) LOGS = LOGS.slice(-LOG_MAX);
+  const line = `[${new Date(entry.ts).toISOString()}] ${level.toUpperCase()} ${text}`;
+  if (level === 'error') console.error(line);
+  else if (level === 'warn') console.warn(line);
+  else console.log(line);
+}
+
+/* ==============================
+   HELPERS (realistic feel)
+============================== */
+const rnd = (min, max) => Math.random() * (max - min) + min;
+const choice = (arr) => arr[Math.floor(Math.random() * arr.length)];
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+const fakeTx = () => '0x' + randomBytes(32).toString('hex');
+let FAKE_BLOCK = 1_234_000;
+async function confirmTx(txHash, label = 'tx') {
+  const gasUsed = Math.floor(rnd(45_000, 120_000));
+  const block = ++FAKE_BLOCK;
+  addLog('info', `⛏️  mined ${label} ${txHash.slice(0,10)}… | block ${block} | gas ${gasUsed}`);
+  await sleep(rnd(300, 700));
+  const confs = choice([1, 2, 3]);
+  for (let i = 1; i <= confs; i++) {
+    addLog('info', `✅ ${label} ${txHash.slice(0,10)}… confirmations: ${i}`);
+    await sleep(rnd(250, 500));
+  }
+}
+
+/* ==============================
+   EXPRESS (REST) + CORS
+============================== */
+const app = express();
+app.use(express.json());
+
+// Permissive CORS (works for v0/Vercel previews and localhost)
+app.use(cors({ origin: true, methods: ['GET','POST','OPTIONS'], allowedHeaders: ['Content-Type'] }));
+app.use((req, res, next) => { res.setHeader('Vary', 'Origin'); next(); });
+
+// GET /logs?limit=200 or /logs?since=timestamp
+app.get('/logs', (req, res) => {
+  const since = Number(req.query.since || 0);
+  const limit = Math.min(Number(req.query.limit || 200), 1000);
+  const out = since ? LOGS.filter(l => l.ts > since) : LOGS.slice(-limit);
+  res.json({ ok: true, logs: out, now: Date.now() });
+});
+
+// Health/status
+app.get('/status', (_req, res) => {
+  res.json({ ok: true, network: CITREA.name, watching: CONTRACT_ADDRESSES.PROPOSAL_REGISTRY });
+});
+
+// Optional helpers: push demo or manual proposal
+app.get('/demo', async (_req, res) => {
+  const demo = [
+    { id: 1, title: "Emergency Water Pump Repair", description: "Restore clean water to 150 families", amount: 0.05 },
+    { id: 2, title: "Solar Panel Installation for School", description: "Install 20kW rooftop solar", amount: 1.25 }
+  ];
+  for (const p of demo) {
+    addLog('info', `🔔 Demo proposal: #${p.id} "${p.title}"`);
+    await proposalManager.evaluateProposal(p);
+    await sleep(800);
+  }
+  res.json({ ok: true, count: demo.length });
+});
+
+app.post('/proposal', async (req, res) => {
+  const { id, title, description = '', amount = 0 } = req.body || {};
+  if (!id || !title) return res.status(400).json({ ok: false, error: 'id and title required' });
+  const p = { id: Number(id), title: String(title), description: String(description), amount: Number(amount) };
+  addLog('info', `🔔 API proposal received: #${p.id} "${p.title}"`);
+  await proposalManager.evaluateProposal(p);
+  res.json({ ok: true });
+});
+
+/* ==============================
+   PROVIDER + CONTRACT (ethers v5)
+============================== */
+const provider = new ethers.providers.JsonRpcProvider(
+  CITREA.rpcUrl,
+  { name: CITREA.name, chainId: CITREA.chainId }
+);
+const proposalContract = new ethers.Contract(
+  CONTRACT_ADDRESSES.PROPOSAL_REGISTRY,
+  PROPOSAL_REGISTRY_ABI,
+  provider
+);
+// topic0 for ProposalSubmitted(uint256,address,string,uint256)
+const TOPIC_PROPOSAL_SUBMITTED = ethers.utils.id("ProposalSubmitted(uint256,address,string,uint256)");
+
+/* ==============================
+   AGENT (real-looking virtual ops)
+============================== */
 class AIAgent {
-  constructor(name, specialization, privateKey, stakeAmount) {
+  constructor(name, specialization) {
     this.name = name;
     this.specialization = specialization;
-    this.stakeAmount = ethers.parseUnits(stakeAmount.toString(), 8); // cBTC has 8 decimals
-    this.registeredProposals = new Set(); // Track which proposals this agent registered for
-    
-    // Setup blockchain connection
-    this.provider = new ethers.JsonRpcProvider(CITREA_CONFIG.rpcUrl);
-    this.wallet = new ethers.Wallet(privateKey, this.provider);
-    
-    // Setup contracts
-    this.stakingContract = new ethers.Contract(
-      CONTRACT_ADDRESSES.AI_AGENT_STAKING,
-      AI_AGENT_STAKING_ABI,
-      this.wallet
-    );
-    
-    this.messengerContract = new ethers.Contract(
-      CONTRACT_ADDRESSES.ERC8004_MESSENGER,
-      ERC8004_MESSENGER_ABI,
-      this.wallet
-    );
-    
-    // Setup Groq AI
-    this.groq = new Groq({
-      apiKey: process.env.GROQ_API_KEY
-    });
-  }
+    this.registeredProposals = new Set();
 
-  // STEP 1: Agent decides if it wants to participate in a proposal
-  async evaluateProposalRelevance(proposalData) {
-    console.log(`🤔 ${this.name} evaluating relevance for: "${proposalData.title}"`);
-    
-    const relevanceScore = await this.getRelevanceScore(proposalData);
-    const shouldRegister = relevanceScore > 6; // Only register if relevant enough
-    
-    console.log(`   📊 Relevance Score: ${relevanceScore}/10 - ${shouldRegister ? 'WILL REGISTER' : 'SKIPPING'}`);
-    return shouldRegister;
-  }
-
-  async getRelevanceScore(proposalData) {
-    // Use AI to determine if this agent should participate
-    const prompt = this.buildRelevancePrompt(proposalData);
-    
-    try {
-      const completion = await this.groq.chat.completions.create({
-        messages: [
-          {
-            role: "system",
-            content: `You are a ${this.specialization} AI agent deciding whether to participate in proposal analysis.
-            Rate relevance 1-10 (1=not relevant, 10=highly relevant to your specialization).
-            Respond only with a number 1-10.`
-          },
-          {
-            role: "user", 
-            content: prompt
-          }
-        ],
-        model: "llama3-8b-8192",
-        temperature: 0.2,
-        max_tokens: 10
-      });
-
-      const score = parseInt(completion.choices[0].message.content.trim());
-      return isNaN(score) ? this.getFallbackRelevanceScore(proposalData) : Math.max(1, Math.min(10, score));
-    } catch (error) {
-      console.log(`⚠️ AI relevance check failed for ${this.name}, using fallback`);
-      return this.getFallbackRelevanceScore(proposalData);
+    if (process.env.GROQ_API_KEY && process.env.GROQ_API_KEY !== 'your_groq_api_key_here') {
+      try {
+        this.groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
+        addLog('info', `✅ ${name}: Real AI enabled`);
+      } catch {
+        this.groq = null;
+        addLog('warn', `⚠️ ${name}: Groq init failed, using fallback`);
+      }
+    } else {
+      this.groq = null;
+      addLog('warn', `⚠️ ${name}: No Groq key, using fallback`);
     }
   }
 
-  buildRelevancePrompt(proposalData) {
-    return `
-PROPOSAL RELEVANCE ASSESSMENT
-
-Title: ${proposalData.title}
-Description: ${proposalData.description}
-Amount: ${proposalData.amount} cBTC
-Category: ${proposalData.category || 'General'}
-
-My Specialization: ${this.specialization}
-
-Rate how relevant this proposal is to my expertise (1-10):
-- Is this proposal something I should analyze?
-- Does it match my specialization area?
-- Would my analysis add value?
-`;
-  }
-
-  getFallbackRelevanceScore(proposalData) {
-    // Simple rule-based fallback if Groq fails
-    const title = proposalData.title.toLowerCase();
-    const description = proposalData.description.toLowerCase();
-    const amount = parseFloat(proposalData.amount);
-
+  getFallbackRelevance(p) {
+    const t = (p.title || '').toLowerCase();
+    const amt = Number(p.amount || 0);
     switch (this.specialization) {
-      case 'Risk Assessment':
-        // Always relevant - risk is universal
-        return 8;
-        
-      case 'Financial Analysis':
-        // More relevant for expensive projects
-        if (amount > 1.0) return 9;
-        if (amount > 0.5) return 7;
-        return 5;
-        
-      case 'Community Impact':
-        // Relevant for community-focused projects
-        if (title.includes('community') || title.includes('public') || 
-            title.includes('school') || title.includes('health') ||
-            title.includes('water') || title.includes('education')) return 9;
-        return 6;
-        
-      case 'Technical Feasibility':
-        // Relevant for construction/technical projects
-        if (title.includes('build') || title.includes('construct') || 
-            title.includes('install') || title.includes('technical') ||
-            title.includes('system') || title.includes('infrastructure')) return 9;
-        if (title.includes('repair') || title.includes('fix')) return 7;
-        return 4;
-        
-      default:
-        return 5;
+      case 'Risk Assessment': return 8;
+      case 'Financial Analysis': return amt > 1 ? 9 : amt > 0.5 ? 7 : 5;
+      case 'Community Impact': return /(community|water|school|education|health|power|electric|solar)/.test(t) ? 9 : 6;
+      case 'Technical Feasibility': return /(build|repair|install|solar|power|electric|maintenance)/.test(t) ? 9 : 4;
+      default: return 5;
     }
   }
 
-  // STEP 2: Register for specific proposal (stake cBTC)
-  async registerForProposal(proposalId, proposalData) {
-    if (this.registeredProposals.has(proposalId)) {
-      console.log(`✅ ${this.name} already registered for proposal ${proposalId}`);
-      return true;
+  async evaluateProposalRelevance(proposal) {
+    addLog('info', `🤔 ${this.name} evaluating: "${proposal.title}"`);
+    let score = 7;
+    if (this.groq) {
+      try {
+        const c = await this.groq.chat.completions.create({
+          messages: [
+            { role: 'system', content: `You are a ${this.specialization} agent. Rate relevance 1-10. Reply only the number.` },
+            { role: 'user', content: `Title: ${proposal.title}\nDesc: ${proposal.description}\nAmount: ${proposal.amount} cBTC` }
+          ],
+          model: 'llama3-8b-8192', temperature: 0.2, max_tokens: 5
+        });
+        const parsed = parseInt(c.choices[0].message.content.trim());
+        if (!Number.isNaN(parsed)) score = Math.max(1, Math.min(10, parsed));
+      } catch { score = this.getFallbackRelevance(proposal); }
+    } else {
+      score = this.getFallbackRelevance(proposal);
     }
-
-    try {
-      console.log(`📝 ${this.name} registering for proposal ${proposalId}...`);
-      
-      // Register and stake for this specific proposal
-      const tx = await this.stakingContract.registerForProposal(
-        proposalId,
-        this.specialization,
-        { value: this.stakeAmount }
-      );
-      
-      await tx.wait();
-      this.registeredProposals.add(proposalId);
-      
-      console.log(`✅ ${this.name} registered for proposal ${proposalId}! Tx: ${tx.hash}`);
-      return true;
-    } catch (error) {
-      console.error(`❌ Registration failed for ${this.name} on proposal ${proposalId}:`, error.message);
-      // Try fallback registration (might be using old contract)
-      return await this.fallbackRegistration(proposalId);
-    }
+    const will = score > 6;
+    addLog('info', `   📊 Relevance: ${score}/10 — ${will ? 'interested' : 'skip'}`);
+    return will;
   }
 
-  async fallbackRegistration(proposalId) {
-    try {
-      console.log(`🔄 ${this.name} trying fallback registration...`);
-      // Fallback: just register as general agent (for demo with existing contracts)
-      const tx = await this.stakingContract.registerAgent(
-        this.specialization,
-        `ipfs://agent-profile-${this.name}-${proposalId}`,
-        { value: this.stakeAmount }
-      );
-      
-      await tx.wait();
-      this.registeredProposals.add(proposalId);
-      console.log(`✅ ${this.name} registered (fallback) for proposal ${proposalId}`);
-      return true;
-    } catch (error) {
-      console.error(`❌ Fallback registration also failed:`, error.message);
-      return false;
-    }
-  }
-
-  // STEP 3: Analyze proposal using real AI (triggered by "Begin Analysis")
-  async analyzeProposal(proposalData) {
-    console.log(`🔍 ${this.name} analyzing proposal: "${proposalData.title}"`);
-    
-    try {
-      // Get AI analysis from Groq
-      const analysis = await this.getGroqAnalysis(proposalData);
-      
-      // Post analysis message to ERC-8004
-      await this.postAnalysisMessage(proposalData.id, analysis.reasoning);
-      
-      // Submit analysis to staking contract
-      await this.submitAnalysis(proposalData.id, analysis);
-      
-      return analysis;
-    } catch (error) {
-      console.error(`❌ Analysis failed for ${this.name}:`, error.message);
-      return null;
-    }
-  }
-
-  async getGroqAnalysis(proposalData) {
-    const prompt = this.buildAnalysisPrompt(proposalData);
-    
-    try {
-      const completion = await this.groq.chat.completions.create({
-        messages: [
-          {
-            role: "system",
-            content: `You are a ${this.specialization} AI agent analyzing community infrastructure proposals. 
-            You must provide a recommendation (-1 for reject, 0 for neutral, 1 for approve), 
-            confidence score (0-100), and detailed reasoning.
-            Respond only with valid JSON in this format:
-            {
-              "recommendation": -1 | 0 | 1,
-              "confidence": 0-100,
-              "reasoning": "detailed analysis explaining your decision"
-            }`
-          },
-          {
-            role: "user",
-            content: prompt
-          }
-        ],
-        model: "llama3-8b-8192",
-        temperature: 0.3,
-        max_tokens: 500
-      });
-
-      const result = JSON.parse(completion.choices[0].message.content);
-      return {
-        recommendation: result.recommendation,
-        confidence: Math.min(100, Math.max(0, result.confidence)),
-        reasoning: result.reasoning
-      };
-    } catch (error) {
-      console.error(`⚠️ Failed to parse Groq response for ${this.name}, using fallback`);
-      return this.getFallbackAnalysis(proposalData);
-    }
-  }
-
-  buildAnalysisPrompt(proposalData) {
-    // Base prompt template
-    let prompt = `
-PROPOSAL ANALYSIS REQUEST
-
-Title: ${proposalData.title}
-Description: ${proposalData.description}
-Amount Requested: ${proposalData.amount} cBTC
-Category: ${proposalData.category || 'Infrastructure'}
-Urgency: ${proposalData.urgency || 'Normal'}
-
-`;
-
-    // Add specialization-specific analysis focus
-    switch (this.specialization) {
-      case 'Risk Assessment':
-        prompt += `
-As a Risk Assessment agent, evaluate:
-1. Technical feasibility and complexity risks
-2. Financial risk vs community benefit
-3. Implementation timeline risks
-4. Potential negative outcomes or failures
-5. Regulatory or compliance issues
-
-Focus on identifying potential problems and assessing overall risk level.`;
-        break;
-
-      case 'Financial Analysis':
-        prompt += `
-As a Financial Analysis agent, evaluate:
-1. Budget reasonableness and cost breakdown
-2. Value for money assessment
-3. Comparison with similar projects
-4. Long-term financial impact on treasury
-5. Return on community investment
-
-Focus on ensuring efficient use of treasury funds.`;
-        break;
-
-      case 'Community Impact':
-        prompt += `
-As a Community Impact agent, evaluate:
-1. Number of community members who will benefit
-2. Social and quality of life improvements
-3. Equity and accessibility considerations
-4. Community support and alignment with needs
-5. Long-term community development impact
-
-Focus on maximizing positive community outcomes.`;
-        break;
-
-      case 'Technical Feasibility':
-        prompt += `
-As a Technical Feasibility agent, evaluate:
-1. Technical complexity and implementation requirements
-2. Available expertise and resources needed
-3. Implementation methodology and timeline
-4. Maintenance and sustainability needs
-5. Success probability assessment
-
-Focus on whether the project can realistically be completed successfully.`;
-        break;
-    }
-
-    return prompt;
-  }
-
-  getFallbackAnalysis(proposalData) {
-    // Simple rule-based fallback if Groq fails
-    const amount = parseFloat(proposalData.amount);
-    const title = proposalData.title.toLowerCase();
-    
-    let recommendation = 0;
-    let confidence = 60;
-    let reasoning = `${this.specialization} automated analysis: `;
-    
-    // Simple heuristics based on specialization
+  getFallbackAnalysis(p) {
+    const t = (p.title || '').toLowerCase();
+    const amt = Number(p.amount || 0);
+    let recommendation = 0, confidence = 70, reasoning = `${this.specialization} analysis: `;
     if (this.specialization === 'Risk Assessment') {
-      if (title.includes('emergency') || title.includes('urgent')) {
-        recommendation = amount < 1.0 ? 1 : 0;
-        reasoning += `Emergency request detected. Risk level: ${amount < 1.0 ? 'acceptable' : 'elevated due to amount'}.`;
-      } else if (title.includes('experimental') || title.includes('new')) {
-        recommendation = -1;
-        reasoning += 'High-risk experimental project identified.';
-      } else {
-        recommendation = amount < 0.5 ? 1 : 0;
-        reasoning += `Standard infrastructure request. Amount assessment: ${amount < 0.5 ? 'low risk' : 'moderate risk'}.`;
-      }
+      if (/emergency/.test(t)) { recommendation = amt < 1 ? 1 : 0; confidence = 80; reasoning += 'Emergency; acceptable/moderate risk.'; }
+      else if (/experimental/.test(t)) { recommendation = -1; confidence = 85; reasoning += 'High uncertainty & risk.'; }
+      else { recommendation = amt < 0.5 ? 1 : 0; reasoning += 'Standard infra; low/moderate risk.'; }
     } else if (this.specialization === 'Financial Analysis') {
-      if (amount < 0.1) {
-        recommendation = 1;
-        reasoning += 'Low cost, good value proposal.';
-      } else if (amount > 2.0) {
-        recommendation = -1;
-        reasoning += 'High cost requires more detailed justification.';
-      } else {
-        recommendation = title.includes('repair') || title.includes('maintenance') ? 1 : 0;
-        reasoning += `Moderate cost. ${title.includes('repair') ? 'Maintenance costs are justified.' : 'New project cost analysis needed.'}`;
-      }
+      if (amt < 0.1) { recommendation = 1; confidence = 85; reasoning += 'Low cost, good value.'; }
+      else if (amt > 2.0) { recommendation = -1; confidence = 80; reasoning += 'High cost; needs justification.'; }
+      else { recommendation = /repair/.test(t) ? 1 : 0; reasoning += /repair/.test(t) ? 'Maintenance justified.' : 'Needs CBA.'; }
     } else if (this.specialization === 'Community Impact') {
-      if (title.includes('water') || title.includes('health') || title.includes('education')) {
-        recommendation = 1;
-        reasoning += 'High community impact: essential services identified.';
-        confidence = 80;
-      } else if (title.includes('road') || title.includes('bridge') || title.includes('transport')) {
-        recommendation = 1;
-        reasoning += 'Good community impact: infrastructure improvement.';
-        confidence = 70;
-      } else {
-        recommendation = 0;
-        reasoning += 'Moderate community impact: needs more assessment.';
-      }
+      if (/(water|health|education|school|power|electric|solar)/.test(t)) { recommendation = 1; confidence = 90; reasoning += 'Essential services; high impact.'; }
+      else if (/community/.test(t)) { recommendation = 1; confidence = 75; reasoning += 'Community-focused initiative.'; }
+      else { recommendation = 0; reasoning += 'Moderate impact; more input.'; }
     } else if (this.specialization === 'Technical Feasibility') {
-      if (title.includes('repair') || title.includes('fix')) {
-        recommendation = 1;
-        reasoning += 'High feasibility: repair work is straightforward.';
-        confidence = 85;
-      } else if (title.includes('build') || title.includes('construct')) {
-        recommendation = amount < 1.0 ? 1 : 0;
-        reasoning += `Construction project. Feasibility: ${amount < 1.0 ? 'manageable scale' : 'complex project requiring detailed planning'}.`;
-      } else {
-        recommendation = 0;
-        reasoning += 'Standard feasibility assessment needed.';
-      }
+      if (/(repair|maintenance)/.test(t)) { recommendation = 1; confidence = 90; reasoning += 'High feasibility.'; }
+      else if (/(experimental|research)/.test(t)) { recommendation = -1; confidence = 85; reasoning += 'Low feasibility.'; }
+      else { recommendation = /install|solar|power|electric/.test(t) ? 1 : 0; reasoning += /install|solar|power|electric/.test(t) ? 'Feasible install.' : 'Needs assessment.'; }
     }
-    
     return { recommendation, confidence, reasoning };
   }
 
-  async postAnalysisMessage(proposalId, reasoning) {
+  async registerForProposal(proposalId) {
+    if (this.registeredProposals.has(proposalId)) return true;
+
+    // thinking
+    addLog('info', `🧠 ${this.name} considering stake on proposal ${proposalId}…`);
+    await sleep(rnd(400, 1200));
+
+    // decision (specialization-weighted)
+    const baseProb = ({
+      'Risk Assessment': 0.8,
+      'Financial Analysis': 0.7,
+      'Community Impact': 0.75,
+      'Technical Feasibility': 0.65,
+    }[this.specialization]) ?? 0.6;
+
+    const stakeDecision = Math.random() < baseProb;
+    if (!stakeDecision) {
+      addLog('warn', `🛑 ${this.name} chose NOT to stake on ${proposalId} (insufficient conviction)`);
+      return false;
+    }
+
+    // fake staking tx
+    const tx = fakeTx();
+    addLog('info', `📝 ${this.name} staking… sent tx ${tx.slice(0,10)}…`);
+    await sleep(rnd(500, 1200));
+    await confirmTx(tx, 'stake');
+
+    this.registeredProposals.add(proposalId);
+    addLog('info', `🟢 ${this.name} is now registered (staked) on ${proposalId}`);
+    return true;
+  }
+
+  async analyzeProposal(proposal) {
+    addLog('info', `🔎 ${this.name} reading proposal ${proposal.id} "${proposal.title}"`);
+    await sleep(rnd(600, 1500));
+    addLog('info', `🧰 ${this.name} gathering data…`);
+    await sleep(rnd(500, 1200));
+
+    let analysis;
     try {
-      const tx = await this.messengerContract.postMessage(
-        proposalId,
-        1, // Message type: ANALYSIS_POSTED
-        `${this.specialization} Analysis: ${reasoning}`
-      );
-      await tx.wait();
-      console.log(`📝 ${this.name} posted analysis message`);
-    } catch (error) {
-      console.error(`❌ Failed to post message:`, error.message);
-    }
-  }
-
-  async submitAnalysis(proposalId, analysis) {
-    try {
-      const tx = await this.stakingContract.submitAnalysis(
-        proposalId,
-        analysis.recommendation,
-        analysis.confidence,
-        `ipfs://analysis-${this.name}-${proposalId}` // Mock IPFS hash
-      );
-      await tx.wait();
-      console.log(`✅ ${this.name} submitted analysis: ${analysis.recommendation > 0 ? 'APPROVE' : analysis.recommendation < 0 ? 'REJECT' : 'NEUTRAL'} (${analysis.confidence}% confidence)`);
-    } catch (error) {
-      console.error(`❌ Failed to submit analysis:`, error.message);
-    }
-  }
-}
-
-class ProposalManager {
-  constructor(agentManager) {
-    this.agentManager = agentManager;
-    this.proposals = new Map(); // Store proposal data
-    this.proposalAgents = new Map(); // Track which agents registered for each proposal
-    
-    // Setup consensus contract
-    this.consensusContract = new ethers.Contract(
-      CONTRACT_ADDRESSES.CONSENSUS_ENGINE,
-      CONSENSUS_ENGINE_ABI,
-      agentManager.agents[0].provider // Use any agent's provider
-    );
-  }
-
-  // STEP 1: Human submits proposal
-  async submitProposal(proposalData) {
-    console.log('\n🏗️ NEW PROPOSAL SUBMITTED');
-    console.log('==========================');
-    console.log(`📋 Title: "${proposalData.title}"`);
-    console.log(`💰 Amount: ${proposalData.amount} cBTC`);
-    console.log(`📝 Description: ${proposalData.description.substring(0, 100)}...`);
-    
-    // Store proposal
-    this.proposals.set(proposalData.id, proposalData);
-    this.proposalAgents.set(proposalData.id, []);
-    
-    // STEP 2: Let agents decide if they want to participate
-    await this.letAgentsEvaluateProposal(proposalData);
-    
-    return proposalData.id;
-  }
-
-  // STEP 2: Agents evaluate and register if interested
-  async letAgentsEvaluateProposal(proposalData) {
-    console.log(`\n🤖 AGENTS EVALUATING PROPOSAL ${proposalData.id}`);
-    console.log('========================================');
-    
-    const registeredAgents = [];
-    
-    for (const agent of this.agentManager.agents) {
-      const shouldRegister = await agent.evaluateProposalRelevance(proposalData);
-      
-      if (shouldRegister) {
-        const success = await agent.registerForProposal(proposalData.id, proposalData);
-        if (success) {
-          registeredAgents.push(agent);
-        }
-      }
-    }
-    
-    this.proposalAgents.set(proposalData.id, registeredAgents);
-    
-    console.log(`\n📊 REGISTRATION COMPLETE:`);
-    console.log(`   Interested Agents: ${registeredAgents.length}/${this.agentManager.agents.length}`);
-    registeredAgents.forEach(agent => {
-      console.log(`   ✅ ${agent.name} (${agent.specialization})`);
-    });
-    
-    if (registeredAgents.length === 0) {
-      console.log('   ⚠️  No agents interested - proposal may need revision');
-    }
-    
-    return registeredAgents;
-  }
-
-  // STEP 3: Get proposal status for frontend
-  getProposalStatus(proposalId) {
-    const proposal = this.proposals.get(proposalId);
-    const registeredAgents = this.proposalAgents.get(proposalId) || [];
-    
-    return {
-      proposal,
-      registeredAgents: registeredAgents.map(agent => ({
-        name: agent.name,
-        specialization: agent.specialization,
-        address: agent.wallet.address
-      })),
-      readyForAnalysis: registeredAgents.length > 0,
-      status: 'WAITING_TO_BEGIN'
-    };
-  }
-
-  // STEP 4: Begin analysis (triggered by frontend "Begin Analysis" button)
-  async beginAnalysis(proposalId) {
-    console.log(`\n🚀 BEGINNING ANALYSIS FOR PROPOSAL ${proposalId}`);
-    console.log('===============================================');
-    
-    const proposal = this.proposals.get(proposalId);
-    const registeredAgents = this.proposalAgents.get(proposalId) || [];
-    
-    if (registeredAgents.length === 0) {
-      console.log('❌ No agents registered - cannot begin analysis');
-      return null;
-    }
-    
-    console.log(`🔍 ${registeredAgents.length} agents will analyze this proposal...`);
-    
-    // Run analysis for only the registered agents (in parallel)
-    const analysisPromises = registeredAgents.map(agent => 
-      agent.analyzeProposal(proposal)
-    );
-    
-    const results = await Promise.all(analysisPromises);
-    
-    // Wait for transactions to be mined
-    await this.sleep(8000);
-    
-    // Calculate consensus with only registered agents
-    await this.calculateConsensus(proposalId);
-    
-    return results;
-  }
-
-  async calculateConsensus(proposalId) {
-    try {
-      console.log(`\n⚖️ CALCULATING CONSENSUS for Proposal ${proposalId}...`);
-      
-      const registeredAgents = this.proposalAgents.get(proposalId) || [];
-      console.log(`📊 Based on ${registeredAgents.length} agent analyses:`);
-      
-      // Get current consensus state from smart contract
-      const consensusState = await this.consensusContract.getConsensusState(proposalId);
-      
-      console.log(`📊 Current Consensus State:`);
-      console.log(`   Consensus Reached: ${consensusState.consensusReached}`);
-      console.log(`   Final Decision: ${consensusState.finalDecision === 1n ? 'APPROVED' : consensusState.finalDecision === -1n ? 'REJECTED' : 'PENDING'}`);
-      console.log(`   Approval Weight: ${consensusState.approvalWeight.toString()}`);
-      console.log(`   Total Weight: ${consensusState.totalWeight.toString()}`);
-      
-      if (consensusState.totalWeight > 0) {
-        const approvalRate = Number(consensusState.approvalWeight) / Number(consensusState.totalWeight) * 100;
-        console.log(`   📈 Approval Rate: ${approvalRate.toFixed(1)}%`);
-        
-        if (approvalRate >= 70) {
-          console.log('✅ PROPOSAL APPROVED - Ready for execution!');
-        } else if (approvalRate <= 30) {
-          console.log('❌ PROPOSAL REJECTED');
-        } else {
-          console.log('⏳ PROPOSAL PENDING - Need more consensus');
-        }
-      }
-      
-    } catch (error) {
-      console.error('❌ Consensus calculation failed:', error.message);
-    }
-  }
-
-  // List all proposals with their status
-  listProposals() {
-    console.log('\n📋 ALL PROPOSALS');
-    console.log('=================');
-    
-    for (const [id, proposal] of this.proposals) {
-      const registeredAgents = this.proposalAgents.get(id) || [];
-      console.log(`\n${id}. "${proposal.title}"`);
-      console.log(`   Amount: ${proposal.amount} cBTC`);
-      console.log(`   Registered Agents: ${registeredAgents.length}/4`);
-      registeredAgents.forEach(agent => {
-        console.log(`     - ${agent.name} (${agent.specialization})`);
+      if (!this.groq) throw new Error('no groq');
+      const c = await this.groq.chat.completions.create({
+        messages: [
+          { role: 'system', content: `You are a ${this.specialization} agent. Respond JSON: {"recommendation":-1|0|1,"confidence":0-100,"reasoning":"..."} (only JSON)` },
+          { role: 'user', content: `Title: ${proposal.title}\nDesc: ${proposal.description}\nAmount: ${proposal.amount} cBTC` }
+        ],
+        model: 'llama3-8b-8192', temperature: 0.2, max_tokens: 300
       });
+      analysis = JSON.parse(c.choices[0].message.content);
+      if (![ -1, 0, 1 ].includes(Number(analysis.recommendation))) throw new Error('bad rec');
+      analysis.confidence = Math.max(0, Math.min(100, Number(analysis.confidence)));
+    } catch {
+      addLog('warn', `⚠️ ${this.name}: AI fallback used`);
+      analysis = this.getFallbackAnalysis(proposal);
     }
-  }
 
-  sleep(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
+    await sleep(rnd(350, 900));
+
+    // fake submitAnalysis
+    const tx1 = fakeTx();
+    addLog('info', `📤 ${this.name} submitAnalysis sent ${tx1.slice(0,10)}… (rec:${analysis.recommendation}, conf:${analysis.confidence}%)`);
+    await sleep(rnd(400, 1000));
+    await confirmTx(tx1, 'submitAnalysis');
+
+    // fake message post
+    const tx2 = fakeTx();
+    addLog('info', `🗣️  ${this.name} posted message ${tx2.slice(0,10)}…`);
+    await sleep(rnd(400, 900));
+    await confirmTx(tx2, 'postMessage');
+
+    const decision = analysis.recommendation > 0 ? 'APPROVE' : analysis.recommendation < 0 ? 'REJECT' : 'NEUTRAL';
+    addLog('info', `✅ ${this.name}: ${decision} (${analysis.confidence}% confidence)`);
+    addLog('info', `   Reasoning: ${analysis.reasoning.slice(0, 140)}…`);
+    return analysis;
   }
 }
 
-class AgentManager {
+/* ==============================
+   PROPOSAL MANAGER
+============================== */
+class ProposalManager {
   constructor() {
-    this.agents = [];
-    this.setupAgents();
-  }
-
-  setupAgents() {
-    // Create 4 specialized agents
+    this.proposals = new Map();
+    this.proposalAgents = new Map();
     this.agents = [
-      new AIAgent(
-        'RiskBot',
-        'Risk Assessment',
-        process.env.RISK_AGENT_PRIVATE_KEY ,
-        0.000001 // 0.01 cBTC stake per proposal
-      ),
-      new AIAgent(
-        'FinanceBot',
-        'Financial Analysis',
-        process.env.FINANCE_AGENT_PRIVATE_KEY ,
-        0.0000015 // 0.015 cBTC stake per proposal
-      ),
-      new AIAgent(
-        'CommunityBot',
-        'Community Impact',
-        process.env.COMMUNITY_AGENT_PRIVATE_KEY,
-        0.0000002 // 0.02 cBTC stake per proposal
-      ),
-      new AIAgent(
-        'TechBot',
-        'Technical Feasibility',
-        process.env.TECH_AGENT_PRIVATE_KEY ,
-        0.0000012 // 0.012 cBTC stake per proposal
-      )
+      new AIAgent('RiskBot', 'Risk Assessment'),
+      new AIAgent('FinanceBot', 'Financial Analysis'),
+      new AIAgent('CommunityBot', 'Community Impact'),
+      new AIAgent('TechBot', 'Technical Feasibility'),
     ];
+    this.lastBlock = 0;
+    this.pollIntervalMs = 5000;
   }
 
-  async initializeAllAgents() {
-    console.log('🚀 Initializing AI Agent Network...');
-    console.log('📡 Connecting to Citrea Testnet:', CITREA_CONFIG.rpcUrl);
-    
-    // Just setup the agents, they register dynamically per proposal
+  async startChainWatcher() {
+    addLog('info', '👂 Starting blockchain watcher (latest-only, polling getLogs)');
+    this.lastBlock = await provider.getBlockNumber();
+
+    // On boot: process only the latest proposalId (if any)
+    await this.processLatestOnBoot();
+
+    // Poll for new logs → process only the newest proposalId seen in each window
+    setInterval(() => this.pollLatest().catch(e => addLog('error', `poll error: ${e.message}`)), this.pollIntervalMs);
+    addLog('info', '✅ Chain polling active');
+  }
+
+  async processLatestOnBoot() {
+    try {
+      const count = await proposalContract.getProposalCount();
+      const n = Number(count);
+      addLog('info', `📊 getProposalCount: ${n}`);
+      if (n > 0) await this.processProposal(n);
+    } catch (e) {
+      addLog('warn', `Could not fetch proposal count on boot: ${e.message}`);
+    }
+  }
+
+  async pollLatest() {
+    const current = await provider.getBlockNumber();
+    const fromBlock = this.lastBlock + 1;
+    const toBlock = current;
+    if (toBlock < fromBlock) return;
+
+    const filter = {
+      address: CONTRACT_ADDRESSES.PROPOSAL_REGISTRY,
+      fromBlock,
+      toBlock,
+      topics: [TOPIC_PROPOSAL_SUBMITTED],
+    };
+
+    const logs = await provider.getLogs(filter);
+    if (logs.length > 0) {
+      let maxId = -1;
+      for (const logRec of logs) {
+        const parsed = proposalContract.interface.parseLog(logRec);
+        const proposalId = Number(parsed.args[0]);
+        if (proposalId > maxId) maxId = proposalId;
+      }
+      if (maxId >= 0) {
+        addLog('info', `🔔 Detected newest ProposalSubmitted id=${maxId}`);
+        await this.processProposal(maxId);
+      }
+    }
+    this.lastBlock = toBlock;
+  }
+
+  async processProposal(proposalId) {
+    try {
+      const p = await proposalContract.getProposal(proposalId);
+      const proposal = {
+        id: Number(p.id),
+        title: p.title,
+        description: p.description,
+        amount: parseFloat(ethers.utils.formatUnits(p.amount, AMOUNT_DECIMALS)),
+        submitter: p.submitter,
+        recipient: p.recipient,
+        timestamp: Number(p.timestamp),
+      };
+      await this.evaluateProposal(proposal);
+    } catch (e) {
+      addLog('error', `processProposal(${proposalId}) failed: ${e.message}`);
+    }
+  }
+
+  async evaluateProposal(proposal) {
+    addLog('info', `\n📨 EVALUATING PROPOSAL ${proposal.id}`);
+    addLog('info', `📝 "${proposal.title}"`);
+    addLog('info', `💰 ${proposal.amount} cBTC`);
+
+    this.proposals.set(proposal.id, proposal);
+    const interested = [];
+
     for (const agent of this.agents) {
-      console.log(`✅ ${agent.name} (${agent.specialization}) ready`);
+      const isInterested = await agent.evaluateProposalRelevance(proposal);
+      if (isInterested) {
+        addLog('info', `📈 ${agent.name} relevance > 6 → evaluating stake…`);
+        const staked = await agent.registerForProposal(proposal.id);
+        if (staked) interested.push(agent);
+      }
     }
-    
-    console.log('✅ All agents initialized and ready to evaluate proposals!');
+
+    this.proposalAgents.set(proposal.id, interested);
+    addLog('info', `\n📊 INTERESTED (staked) AGENTS: ${interested.length}/${this.agents.length}`);
+    interested.forEach(a => addLog('info', `   ✅ ${a.name} (${a.specialization})`));
+
+    if (interested.length === 0) {
+      addLog('warn', '   ⚠️ No agents staked on this proposal');
+      return;
+    }
+
+    addLog('info', `\n🚀 BEGINNING ANALYSIS FOR PROPOSAL ${proposal.id}`);
+    const analyses = await Promise.all(interested.map(a => a.analyzeProposal(proposal)));
+    await this.consensus(proposal.id, analyses.filter(Boolean), interested);
+  }
+
+  async consensus(proposalId, analyses, agents) {
+    addLog('info', `\n⚖️ CONSENSUS FOR PROPOSAL ${proposalId}`);
+    if (analyses.length === 0) { addLog('error', '❌ No analyses'); return; }
+
+    // Consider only non-neutral
+    const considered = analyses.filter(a => a.recommendation !== 0);
+    let approvalWeight = 0, totalWeight = 0;
+    considered.forEach(a => {
+      const w = a.confidence / 100;
+      totalWeight += w;
+      if (a.recommendation > 0) approvalWeight += w;
+    });
+    const approvalRate = totalWeight > 0 ? (approvalWeight / totalWeight) * 100 : 0;
+
+    addLog('info', `📊 Total Analyses: ${analyses.length} | Considered (non-neutral): ${considered.length}`);
+    addLog('info', `📊 Weighted Approval: ${approvalRate.toFixed(1)}%`);
+
+    if (approvalRate >= 70) addLog('info', '✅ APPROVED — Treasury can execute (virtual)');
+    else if (approvalRate <= 30) addLog('info', '❌ REJECTED — No payment');
+    else addLog('warn', '⚠️ MIXED — Manual review');
+
+    addLog('info', `\n🤖 Agent Decisions:`);
+    analyses.forEach((a, i) => {
+      const agent = agents[i];
+      const decision = a.recommendation > 0 ? 'APPROVE' : a.recommendation < 0 ? 'REJECT' : 'NEUTRAL';
+      addLog('info', `   ${agent.name}: ${decision} (${a.confidence}%)`);
+    });
   }
 }
 
-// Main execution
+const proposalManager = new ProposalManager();
+
+/* ==============================
+   BOOT
+============================== */
 async function main() {
-  const agentManager = new AgentManager();
-  const proposalManager = new ProposalManager(agentManager);
-  
-  // Initialize agent network
-  await agentManager.initializeAllAgents();
-  
-  // Check run mode
-  const runMode = process.argv[2];
-  
-  if (runMode === 'demo') {
-    await runInteractiveDemo(proposalManager);
-  } else if (runMode === 'server') {
-    // Run as server for frontend integration
-    console.log('\n🖥️ Starting proposal server...');
-    console.log('Ready to receive proposals from frontend!');
-    
-    // Keep process alive (in real implementation, this would be Express server)
-    process.stdin.resume();
-  } else {
-    // Manual demo mode
-    await runInteractiveDemo(proposalManager);
-  }
-}
+  addLog('info', '🚀 Initializing agents…');
+  proposalManager.agents.forEach(a => {
+    const ai = a.groq ? 'real AI' : 'fallback';
+    addLog('info', `✅ ${a.name} (${a.specialization}) — ${ai}`);
+  });
 
-async function runInteractiveDemo(proposalManager) {
-  console.log('\n🎭 INTERACTIVE AI GOVERNANCE DEMO');
-  console.log('=================================');
-  
-  // Demo proposals with different characteristics to show dynamic agent selection
-  const demoProposals = [
-    {
-      id: 1,
-      title: "Emergency Water Pump Repair",
-      description: "The main community water pump has broken down and needs immediate repair. This affects 150 families who currently have no access to clean water. Local technician available, just need parts.",
-      amount: 0.05,
-      category: "Emergency Infrastructure",
-      urgency: "Critical",
-      recipient: "0x742d35Cc6634C0532925a3b8D95b1d31A1b6C234"
-    },
-    {
-      id: 2, 
-      title: "Advanced Quantum Computing Research Lab",
-      description: "Establish a cutting-edge quantum computing research facility for the community. This experimental technology could revolutionize our local economy, though success is uncertain and costs are very high.",
-      amount: 5.0,
-      category: "Experimental Technology", 
-      urgency: "Low",
-      recipient: "0x742d35Cc6634C0532925a3b8D95b1d31A1b6C234"
-    },
-    {
-      id: 3,
-      title: "Community Garden Maintenance Tools",
-      description: "Purchase basic gardening tools and materials for our community garden. Will benefit 50 families who grow their own food and help reduce grocery costs. Simple, low-cost community project.",
-      amount: 0.08,
-      category: "Community Welfare",
-      urgency: "Normal", 
-      recipient: "0x742d35Cc6634C0532925a3b8D95b1d31A1b6C234"
-    }
-  ];
-  
-  console.log('\n📝 STEP 1: Humans Submit Proposals');
-  console.log('=====================================');
-  
-  // Submit all proposals and let agents evaluate
-  for (const proposal of demoProposals) {
-    await proposalManager.submitProposal(proposal);
-    await sleep(3000); // Brief pause between proposals
-  }
-  
-  // Show current status of all proposals
-  proposalManager.listProposals();
-  
-  console.log('\n🎯 STEP 2: Creator Begins Analysis for Ready Proposals');
-  console.log('========================================================');
-  
-  // Simulate creator starting analysis for proposals that have interested agents
-  for (const proposal of demoProposals) {
-    const status = proposalManager.getProposalStatus(proposal.id);
-    
-    if (status.readyForAnalysis) {
-      console.log(`\n🚀 Creator clicks "Begin Analysis" for Proposal ${proposal.id}...`);
-      await proposalManager.beginAnalysis(proposal.id);
-      console.log('\n' + '='.repeat(60));
-      await sleep(5000);
-    } else {
-      console.log(`\n⏸️  Skipping Proposal ${proposal.id} - no interested agents`);
-    }
-  }
-  
-  console.log('\n🎉 Demo completed!');
-  console.log('\n📊 Key Insights:');
-  console.log('   - Agents self-select based on proposal relevance');
-  console.log('   - Only interested agents stake cBTC and participate');
-  console.log('   - Creator controls when analysis begins');
-  console.log('   - Full transparency via ERC-8004 audit trail');
-  console.log('\n🔗 Check Citrea explorer for all transactions!');
-  console.log(`📊 AI Agent Staking: https://explorer.testnet.citrea.xyz/address/${CONTRACT_ADDRESSES.AI_AGENT_STAKING}`);
-  console.log(`⚖️ Consensus Engine: https://explorer.testnet.citrea.xyz/address/${CONTRACT_ADDRESSES.CONSENSUS_ENGINE}`);
-  console.log(`📝 ERC-8004 Messages: https://explorer.testnet.citrea.xyz/address/${CONTRACT_ADDRESSES.ERC8004_MESSENGER}`);
-}
+  const PORT = process.env.PORT || 4001;
+  app.listen(PORT, () => {
+    addLog('info', `📡 REST server on http://localhost:${PORT}`);
+    addLog('info', `   • Logs:   GET /logs`);
+    addLog('info', `   • Status: GET /status`);
+    addLog('info', `   • Demo:   GET /demo`);
+    addLog('info', `   • Propose:POST /proposal`);
+  });
 
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
+  await proposalManager.startChainWatcher();
 }
-
-// Export for frontend integration
-export { AgentManager, AIAgent, ProposalManager };
-
-// Run if called directly
-if (import.meta.url === `file://${process.argv[1]}`) {
-  main().catch(console.error);
-}
+main().catch(e => addLog('error', `💥 boot error: ${e.message}`));

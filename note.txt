@@ -1,3 +1,4 @@
 ERC8004Messenger.sol deployed to citrea testnet:0x7A26B68b9DFBeb0284076F4fC959e01044a21DCa
 AIAgentStaking.sol deployed to citrea:0xaC855951321913A8dBBb7631A5DbcbcE2366570C
 consensus engine deployed to citrea:0xd5D80311b62e32A7D519636796cEFB1C37757362
+Proposal Registry deployed to citrea :0x3c8CF76cA8125CfD6D01C2DAB0CE04655Cc33f26

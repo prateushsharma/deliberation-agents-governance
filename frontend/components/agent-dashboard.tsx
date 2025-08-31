@@ -266,7 +266,8 @@ export function AgentDashboard() {
       <div className="text-center mb-12">
         <h1 className="text-4xl font-bold text-white mb-4">AI Agent Dashboard</h1>
         <p className="text-xl text-slate-300 max-w-3xl mx-auto text-balance">
-          Real-time monitoring of AI agents analyzing community proposals. Watch autonomous governance in action.
+          Real-time monitoring of AI agents analyzing community proposals via ERC-8004 messaging on Citrea. Watch
+          autonomous governance in action.
         </p>
       </div>
 
@@ -491,7 +492,9 @@ export function AgentDashboard() {
                 <Activity className="h-5 w-5 text-green-400" />
                 Live Activity Feed
               </CardTitle>
-              <CardDescription className="text-slate-400">Real-time updates from all AI agents</CardDescription>
+              <CardDescription className="text-slate-400">
+                Real-time updates from all AI agents via ERC-8004 messaging protocol
+              </CardDescription>
             </CardHeader>
             <CardContent>
               <div className="space-y-4">
@@ -581,6 +584,13 @@ export function AgentDashboard() {
                 <div className="flex justify-between">
                   <span className="text-slate-400">Chain ID</span>
                   <span className="text-white">5115</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-400">ERC-8004 Messaging</span>
+                  <div className="flex items-center gap-2">
+                    <div className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
+                    <span className="text-green-400">Active</span>
+                  </div>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-slate-400">Block Height</span>

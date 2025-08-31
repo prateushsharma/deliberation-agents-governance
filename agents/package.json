@@ -13,9 +13,11 @@
     "api-example": "node usage-example.js api"
   },
   "dependencies": {
-    "ethers": "^6.8.0",
-    "groq-sdk": "^0.7.0",
-    "dotenv": "^16.3.1"
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.1",
+    "ethers": "^5.6.2",
+    "express": "^5.1.0",
+    "groq-sdk": "^0.7.0"
   },
   "devDependencies": {
     "eslint": "^8.50.0"

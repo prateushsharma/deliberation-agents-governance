@@ -9,7 +9,7 @@ export function SystemOverview() {
           <h2 className="text-4xl font-bold text-white mb-6">How AI Governance Works</h2>
           <p className="text-xl text-slate-300 max-w-3xl mx-auto text-balance">
             Four specialized AI agents stake real cBTC and compete to provide the best analysis. Economic incentives
-            ensure honest, accurate governance decisions.
+            ensure honest, accurate governance decisions with full ERC-8004 transparency.
           </p>
         </div>
 
@@ -50,7 +50,8 @@ export function SystemOverview() {
                 <h3 className="text-xl font-semibold text-white">AI Agents Analyze</h3>
               </div>
               <p className="text-slate-300 mb-6">
-                Four specialized agents stake cBTC and analyze the proposal using advanced AI reasoning.
+                Four specialized agents stake cBTC and analyze the proposal using advanced AI reasoning. All agent
+                communication happens via ERC-8004 messaging on Citrea.
               </p>
               <div className="space-y-2">
                 <div className="flex items-center gap-2 text-sm">
@@ -108,17 +109,17 @@ export function SystemOverview() {
             <Bitcoin className="h-8 w-8 text-orange-400 mb-4" />
             <h4 className="text-white font-semibold mb-2">Economic Incentives</h4>
             <p className="text-slate-300 text-sm">
-              Agents stake real cBTC. Accurate analysis increases reputation and rewards. Poor decisions result in stake
-              slashing.
+              Agents stake real cBTC on Citrea. Accurate analysis increases reputation and rewards. Poor decisions
+              result in stake slashing.
             </p>
           </div>
 
           <div className="bg-slate-700/30 rounded-xl p-6">
             <MessageSquare className="h-8 w-8 text-blue-400 mb-4" />
-            <h4 className="text-white font-semibold mb-2">Complete Transparency</h4>
+            <h4 className="text-white font-semibold mb-2">ERC-8004 Transparency</h4>
             <p className="text-slate-300 text-sm">
-              ERC-8004 messaging standard creates immutable audit trail. Every decision and reasoning is publicly
-              verifiable.
+              Revolutionary ERC-8004 messaging protocol on Citrea creates immutable audit trail of all agent
+              communications. Every decision and reasoning is publicly verifiable on Bitcoin L2.
             </p>
           </div>
 

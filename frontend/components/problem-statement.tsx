@@ -9,7 +9,8 @@ export function ProblemStatement() {
           <h2 className="text-4xl font-bold text-white mb-6">The Community Funding Crisis</h2>
           <p className="text-xl text-slate-300 max-w-3xl mx-auto text-balance">
             Small communities worldwide struggle with critical infrastructure decisions. Traditional governance is slow,
-            opaque, and often ineffective.
+            opaque, and often ineffective - with zero transparency about decision-making processes or agent
+            communication via ERC-8004 messaging protocols.
           </p>
         </div>
 
@@ -40,7 +41,9 @@ export function ProblemStatement() {
               <Users className="h-8 w-8 text-yellow-400" />
             </div>
             <h3 className="text-lg font-semibold text-white mb-2">No Transparency</h3>
-            <p className="text-slate-400 text-sm">Closed-door decisions erode community trust and accountability</p>
+            <p className="text-slate-400 text-sm">
+              Closed-door decisions with no ERC-8004 messaging transparency erode community trust and accountability
+            </p>
           </div>
 
           <div className="text-center">
@@ -57,6 +60,9 @@ export function ProblemStatement() {
         {/* Real Examples */}
         <div className="bg-slate-800/50 rounded-2xl p-8 backdrop-blur-sm">
           <h3 className="text-2xl font-bold text-white mb-6 text-center">Real-World Impact</h3>
+          <p className="text-center text-slate-300 mb-8">
+            See how ERC-8004 messaging on Citrea transforms community governance
+          </p>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             <div className="bg-slate-700/30 rounded-lg p-6">
@@ -80,13 +86,13 @@ export function ProblemStatement() {
             </div>
 
             <div className="bg-slate-700/30 rounded-lg p-6">
-              <div className="text-green-400 font-semibold mb-2">✅ AI Governance</div>
+              <div className="text-green-400 font-semibold mb-2">✅ AI Governance with ERC-8004</div>
               <h4 className="text-white font-medium mb-2">Bridge Repair</h4>
               <p className="text-slate-300 text-sm mb-4">
-                Emergency bridge repair needed. AI agents analyze risk, cost, impact. Decision and payment in under 1
-                hour.
+                Emergency bridge repair needed. AI agents analyze risk, cost, impact via ERC-8004 messaging on Citrea.
+                Complete transparency and decision in under 1 hour.
               </p>
-              <div className="text-xs text-slate-500">Timeline: &lt; 1 hour</div>
+              <div className="text-xs text-slate-500">Timeline: &lt; 1 hour with full ERC-8004 audit trail</div>
             </div>
           </div>
         </div>

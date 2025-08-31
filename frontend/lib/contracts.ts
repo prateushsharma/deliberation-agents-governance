@@ -14,6 +14,7 @@ export const CONTRACT_ADDRESSES = {
   AI_AGENT_STAKING: "0xaC855951321913A8dBBb7631A5DbcbcE2366570C",
   CONSENSUS_ENGINE: "0xd5D80311b62e32A7D519636796cEFB1C37757362",
   ERC8004_MESSENGER: "0x7A26B68b9DFBeb0284076F4fC959e01044a21DCa",
+  PROPOSAL_REGISTRY: "0x3c8CF76cA8125CfD6D01C2DAB0CE04655Cc33f26",
 } as const
 
 // Contract ABIs
@@ -43,6 +44,353 @@ export const ERC8004_MESSENGER_ABI = [
   "event MessagePosted(uint256 indexed proposalId, address indexed sender, string content, uint8 messageType)",
 ] as const
 
+export const PROPOSAL_REGISTRY_ABI = [
+  {
+    anonymous: false,
+    inputs: [
+      {
+        indexed: true,
+        internalType: "uint256",
+        name: "proposalId",
+        type: "uint256",
+      },
+      {
+        indexed: false,
+        internalType: "enum ProposalRegistry.ProposalStatus",
+        name: "newStatus",
+        type: "uint8",
+      },
+      {
+        indexed: true,
+        internalType: "address",
+        name: "updater",
+        type: "address",
+      },
+    ],
+    name: "ProposalStatusChanged",
+    type: "event",
+  },
+  {
+    anonymous: false,
+    inputs: [
+      {
+        indexed: true,
+        internalType: "uint256",
+        name: "proposalId",
+        type: "uint256",
+      },
+      {
+        indexed: true,
+        internalType: "address",
+        name: "submitter",
+        type: "address",
+      },
+      {
+        indexed: false,
+        internalType: "string",
+        name: "title",
+        type: "string",
+      },
+      {
+        indexed: false,
+        internalType: "uint256",
+        name: "amount",
+        type: "uint256",
+      },
+      {
+        indexed: false,
+        internalType: "uint256",
+        name: "timestamp",
+        type: "uint256",
+      },
+    ],
+    name: "ProposalSubmitted",
+    type: "event",
+  },
+  {
+    inputs: [
+      {
+        internalType: "string",
+        name: "_title",
+        type: "string",
+      },
+      {
+        internalType: "string",
+        name: "_description",
+        type: "string",
+      },
+      {
+        internalType: "uint256",
+        name: "_amount",
+        type: "uint256",
+      },
+      {
+        internalType: "string",
+        name: "_recipient",
+        type: "string",
+      },
+    ],
+    name: "submitProposal",
+    outputs: [
+      {
+        internalType: "uint256",
+        name: "",
+        type: "uint256",
+      },
+    ],
+    stateMutability: "nonpayable",
+    type: "function",
+  },
+  {
+    inputs: [
+      {
+        internalType: "uint256",
+        name: "_proposalId",
+        type: "uint256",
+      },
+      {
+        internalType: "enum ProposalRegistry.ProposalStatus",
+        name: "_newStatus",
+        type: "uint8",
+      },
+    ],
+    name: "updateProposalStatus",
+    outputs: [],
+    stateMutability: "nonpayable",
+    type: "function",
+  },
+  {
+    inputs: [
+      {
+        internalType: "uint256",
+        name: "",
+        type: "uint256",
+      },
+    ],
+    name: "activeProposalIds",
+    outputs: [
+      {
+        internalType: "uint256",
+        name: "",
+        type: "uint256",
+      },
+    ],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [],
+    name: "getAllActiveProposals",
+    outputs: [
+      {
+        internalType: "uint256[]",
+        name: "",
+        type: "uint256[]",
+      },
+    ],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [
+      {
+        internalType: "uint256",
+        name: "_proposalId",
+        type: "uint256",
+      },
+    ],
+    name: "getProposal",
+    outputs: [
+      {
+        components: [
+          {
+            internalType: "uint256",
+            name: "id",
+            type: "uint256",
+          },
+          {
+            internalType: "string",
+            name: "title",
+            type: "string",
+          },
+          {
+            internalType: "string",
+            name: "description",
+            type: "string",
+          },
+          {
+            internalType: "uint256",
+            name: "amount",
+            type: "uint256",
+          },
+          {
+            internalType: "address",
+            name: "submitter",
+            type: "address",
+          },
+          {
+            internalType: "string",
+            name: "recipient",
+            type: "string",
+          },
+          {
+            internalType: "uint256",
+            name: "timestamp",
+            type: "uint256",
+          },
+          {
+            internalType: "enum ProposalRegistry.ProposalStatus",
+            name: "status",
+            type: "uint8",
+          },
+        ],
+        internalType: "struct ProposalRegistry.Proposal",
+        name: "",
+        type: "tuple",
+      },
+    ],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [],
+    name: "getProposalCount",
+    outputs: [
+      {
+        internalType: "uint256",
+        name: "",
+        type: "uint256",
+      },
+    ],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [
+      {
+        internalType: "enum ProposalRegistry.ProposalStatus",
+        name: "_status",
+        type: "uint8",
+      },
+    ],
+    name: "getProposalsByStatus",
+    outputs: [
+      {
+        internalType: "uint256[]",
+        name: "",
+        type: "uint256[]",
+      },
+    ],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [
+      {
+        internalType: "address",
+        name: "_submitter",
+        type: "address",
+      },
+    ],
+    name: "getProposalsBySubmitter",
+    outputs: [
+      {
+        internalType: "uint256[]",
+        name: "",
+        type: "uint256[]",
+      },
+    ],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [
+      {
+        internalType: "uint256",
+        name: "_count",
+        type: "uint256",
+      },
+    ],
+    name: "getRecentProposals",
+    outputs: [
+      {
+        internalType: "uint256[]",
+        name: "",
+        type: "uint256[]",
+      },
+    ],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [],
+    name: "proposalCount",
+    outputs: [
+      {
+        internalType: "uint256",
+        name: "",
+        type: "uint256",
+      },
+    ],
+    stateMutability: "view",
+    type: "function",
+  },
+  {
+    inputs: [
+      {
+        internalType: "uint256",
+        name: "",
+        type: "uint256",
+      },
+    ],
+    name: "proposals",
+    outputs: [
+      {
+        internalType: "uint256",
+        name: "id",
+        type: "uint256",
+      },
+      {
+        internalType: "string",
+        name: "title",
+        type: "string",
+      },
+      {
+        internalType: "string",
+        name: "description",
+        type: "string",
+      },
+      {
+        internalType: "uint256",
+        name: "amount",
+        type: "uint256",
+      },
+      {
+        internalType: "address",
+        name: "submitter",
+        type: "address",
+      },
+      {
+        internalType: "string",
+        name: "recipient",
+        type: "string",
+      },
+      {
+        internalType: "uint256",
+        name: "timestamp",
+        type: "uint256",
+      },
+      {
+        internalType: "enum ProposalRegistry.ProposalStatus",
+        name: "status",
+        type: "uint8",
+      },
+    ],
+    stateMutability: "view",
+    type: "function",
+  },
+] as const
+
 // Provider setup
 export function getProvider() {
   return new ethers.JsonRpcProvider(CITREA_CONFIG.rpcUrl)
@@ -62,6 +410,11 @@ export function getConsensusContract(signerOrProvider?: ethers.Signer | ethers.P
 export function getMessengerContract(signerOrProvider?: ethers.Signer | ethers.Provider) {
   const provider = signerOrProvider || getProvider()
   return new ethers.Contract(CONTRACT_ADDRESSES.ERC8004_MESSENGER, ERC8004_MESSENGER_ABI, provider)
+}
+
+export function getProposalRegistryContract(signerOrProvider?: ethers.Signer | ethers.Provider) {
+  const provider = signerOrProvider || getProvider()
+  return new ethers.Contract(CONTRACT_ADDRESSES.PROPOSAL_REGISTRY, PROPOSAL_REGISTRY_ABI, provider)
 }
 
 // Utility functions

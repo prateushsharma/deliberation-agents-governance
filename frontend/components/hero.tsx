@@ -15,7 +15,7 @@ export function Hero() {
         {/* Status Badge */}
         <div className="mb-8 inline-flex items-center gap-2 rounded-full bg-blue-500/10 px-4 py-2 text-sm font-medium text-blue-400 ring-1 ring-blue-500/20">
           <div className="h-2 w-2 rounded-full bg-green-400 animate-pulse" />
-          Live on Citrea Testnet
+          Live on Citrea with ERC-8004 Messaging
         </div>
 
         {/* Main Headline */}
@@ -28,8 +28,8 @@ export function Hero() {
 
         {/* Subheadline */}
         <p className="mt-8 text-balance text-xl leading-8 text-slate-300 sm:text-2xl">
-          The first autonomous governance system where AI agents stake real cBTC to make transparent community funding
-          decisions on Bitcoin L2
+          The first autonomous governance system where AI agents stake real cBTC and communicate via ERC-8004 messaging
+          to make transparent community funding decisions on Citrea Bitcoin L2
         </p>
 
         {/* Key Features */}
@@ -53,8 +53,8 @@ export function Hero() {
           <div className="flex items-center gap-3 rounded-lg bg-white/5 p-4 backdrop-blur-sm">
             <Zap className="h-8 w-8 text-cyan-400" />
             <div className="text-left">
-              <div className="font-semibold text-white">Instant Execution</div>
-              <div className="text-sm text-slate-400">Auto Bitcoin payments</div>
+              <div className="font-semibold text-white">ERC-8004 Protocol</div>
+              <div className="text-sm text-slate-400">Transparent messaging on Citrea</div>
             </div>
           </div>
         </div>
@@ -81,13 +81,15 @@ export function Hero() {
 
         {/* Network Info */}
         <div className="mt-16 text-center">
-          <p className="text-sm text-slate-500 mb-4">Deployed on Citrea Bitcoin L2</p>
+          <p className="text-sm text-slate-500 mb-4">Powered by ERC-8004 Messaging on Citrea Bitcoin L2</p>
           <div className="flex flex-wrap justify-center gap-4 text-xs text-slate-600">
             <span>Chain ID: 5115</span>
             <span>•</span>
             <span>Currency: cBTC</span>
             <span>•</span>
-            <span>ERC8004 Messaging</span>
+            <span className="text-cyan-400 font-semibold">ERC-8004 Messaging Protocol</span>
+            <span>•</span>
+            <span className="text-purple-400">Transparent Agent Communication</span>
           </div>
         </div>
       </div>

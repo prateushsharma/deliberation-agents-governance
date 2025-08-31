@@ -10,8 +10,11 @@ import { Label } from "@/components/ui/label"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Badge } from "@/components/ui/badge"
-import { AlertCircle, CheckCircle, Loader2, Zap } from "lucide-react"
+import { AlertCircle, CheckCircle, Loader2, Zap, Wallet } from "lucide-react"
 import { Alert, AlertDescription } from "@/components/ui/alert"
+import { useWallet } from "@/hooks/use-wallet"
+import { getProposalRegistryContract, parseCBTC } from "@/lib/contracts"
+import LogsStream from "@/components/logs-stream"
 
 interface ProposalFormData {
   title: string
@@ -23,6 +26,8 @@ interface ProposalFormData {
 }
 
 export function CreateProposalForm() {
+  const { account, isConnected, connect, disconnect, signer } = useWallet()
+
   const [formData, setFormData] = useState<ProposalFormData>({
     title: "",
     description: "",
@@ -34,22 +39,91 @@ export function CreateProposalForm() {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [submitStatus, setSubmitStatus] = useState<"idle" | "success" | "error">("idle")
   const [proposalId, setProposalId] = useState<number | null>(null)
+  const [errorMessage, setErrorMessage] = useState<string>("")
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+
+    if (!isConnected || !signer) {
+      setErrorMessage("Please connect your wallet first")
+      setSubmitStatus("error")
+      return
+    }
+
     setIsSubmitting(true)
     setSubmitStatus("idle")
+    setErrorMessage("")
 
     try {
-      // Simulate proposal submission
-      await new Promise((resolve) => setTimeout(resolve, 2000))
+      const contract = getProposalRegistryContract(signer)
+      const amountInSatoshis = parseCBTC(formData.amount)
 
-      // Generate mock proposal ID
-      const newProposalId = Math.floor(Math.random() * 1000) + 1
+      console.log("[v0] Submitting proposal to smart contract...")
+      const tx = await contract.submitProposal(
+        formData.title,
+        formData.description,
+        amountInSatoshis,
+        formData.recipient,
+      )
+
+      console.log("[v0] Transaction sent:", tx.hash)
+      const receipt = await tx.wait()
+      console.log("[v0] Transaction confirmed:", receipt)
+
+      const event = receipt.logs.find((log: any) => {
+        try {
+          const parsed = contract.interface.parseLog(log)
+          return parsed?.name === "ProposalSubmitted"
+        } catch {
+          return false
+        }
+      })
+
+      let newProposalId: number
+      if (event) {
+        const parsed = contract.interface.parseLog(event)
+        newProposalId = Number(parsed?.args[0])
+      } else {
+        newProposalId = Date.now()
+      }
+
+      const agentsApiBase = process.env.NEXT_PUBLIC_AGENTS_API_BASE || "http://localhost:4001"
+      console.log("[v0] Sending proposal to agents server at:", agentsApiBase)
+
+      const response = await fetch(`${agentsApiBase}/proposal`, {
+        method: "POST",
+        mode: "cors",
+        credentials: "omit",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify({
+          id: newProposalId,
+          title: formData.title,
+          description: formData.description,
+          amount: Number.parseFloat(formData.amount),
+          category: formData.category,
+          urgency: formData.urgency,
+          recipient: formData.recipient,
+          submitter: account,
+        }),
+      })
+
+      console.log("[v0] Agents API response status:", response.status)
+
+      if (!response.ok) {
+        const errorText = await response.text()
+        console.log("[v0] Agents API error response:", errorText)
+        throw new Error(`Agents API error: ${response.status} - ${errorText}`)
+      }
+
+      const responseData = await response.json()
+      console.log("[v0] Agents API success:", responseData)
+
       setProposalId(newProposalId)
       setSubmitStatus("success")
 
-      // Reset form
       setFormData({
         title: "",
         description: "",
@@ -58,7 +132,19 @@ export function CreateProposalForm() {
         urgency: "Normal",
         recipient: "",
       })
-    } catch (error) {
+    } catch (error: any) {
+      console.error("[v0] Proposal submission failed:", error)
+
+      if (error.message?.includes("Failed to fetch") || error instanceof TypeError) {
+        setErrorMessage(
+          "CORS Error: Cannot connect to localhost from v0 preview. Your agents server needs CORS headers or use ngrok/proxy. The blockchain submission worked successfully.",
+        )
+      } else if (error.message?.includes("Agents API error")) {
+        setErrorMessage(`Agents server error: ${error.message}`)
+      } else {
+        setErrorMessage(error.message || "Failed to submit proposal")
+      }
+
       setSubmitStatus("error")
     } finally {
       setIsSubmitting(false)
@@ -73,39 +159,66 @@ export function CreateProposalForm() {
     formData.title && formData.description && formData.amount && formData.category && formData.recipient
 
   return (
-    <div className="max-w-4xl mx-auto">
-      {/* Success Message */}
+    <div className="max-w-7xl mx-auto">
       {submitStatus === "success" && (
         <Alert className="mb-8 border-green-500/20 bg-green-500/10">
           <CheckCircle className="h-4 w-4 text-green-400" />
           <AlertDescription className="text-green-300">
-            Proposal #{proposalId} submitted successfully! AI agents are now evaluating your request.
+            Proposal #{proposalId} submitted successfully! AI agents are now analyzing via ERC-8004 messaging protocol.
           </AlertDescription>
         </Alert>
       )}
 
-      {/* Error Message */}
       {submitStatus === "error" && (
         <Alert className="mb-8 border-red-500/20 bg-red-500/10">
           <AlertCircle className="h-4 w-4 text-red-400" />
-          <AlertDescription className="text-red-300">Failed to submit proposal. Please try again.</AlertDescription>
+          <AlertDescription className="text-red-300">
+            {errorMessage || "Failed to submit proposal. Please try again."}
+          </AlertDescription>
         </Alert>
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        {/* Main Form */}
         <div className="lg:col-span-2">
           <Card className="bg-slate-800/50 border-slate-700">
             <CardHeader>
               <CardTitle className="text-white">Submit Infrastructure Proposal</CardTitle>
               <CardDescription className="text-slate-400">
                 Provide detailed information about your community infrastructure needs. AI agents will analyze
-                feasibility, cost, and impact.
+                feasibility, cost, and impact using ERC-8004 messaging protocol.
               </CardDescription>
             </CardHeader>
             <CardContent>
+              {!isConnected ? (
+                <div className="mb-6 p-4 bg-blue-500/10 border border-blue-500/20 rounded-lg">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="text-white font-medium">Connect Wallet Required</h3>
+                      <p className="text-slate-400 text-sm">
+                        Connect your MetaMask wallet to submit proposals on Citrea
+                      </p>
+                    </div>
+                    <Button onClick={connect} className="bg-blue-600 hover:bg-blue-700">
+                      <Wallet className="mr-2 h-4 w-4" />
+                      Connect Wallet
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <div className="mb-6 p-4 bg-green-500/10 border border-green-500/20 rounded-lg">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <h3 className="text-white font-medium">Wallet Connected</h3>
+                      <p className="text-slate-400 text-sm font-mono">{account}</p>
+                    </div>
+                    <Button onClick={disconnect} variant="outline" size="sm">
+                      Disconnect
+                    </Button>
+                  </div>
+                </div>
+              )}
+
               <form onSubmit={handleSubmit} className="space-y-6">
-                {/* Title */}
                 <div className="space-y-2">
                   <Label htmlFor="title" className="text-white">
                     Project Title
@@ -120,7 +233,6 @@ export function CreateProposalForm() {
                   />
                 </div>
 
-                {/* Description */}
                 <div className="space-y-2">
                   <Label htmlFor="description" className="text-white">
                     Project Description
@@ -136,7 +248,6 @@ export function CreateProposalForm() {
                   />
                 </div>
 
-                {/* Amount and Category Row */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label htmlFor="amount" className="text-white">
@@ -176,7 +287,6 @@ export function CreateProposalForm() {
                   </div>
                 </div>
 
-                {/* Urgency and Recipient Row */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-2">
                     <Label htmlFor="urgency" className="text-white">
@@ -210,17 +320,16 @@ export function CreateProposalForm() {
                   </div>
                 </div>
 
-                {/* Submit Button */}
                 <Button
                   type="submit"
-                  disabled={!isFormValid || isSubmitting}
+                  disabled={!isFormValid || isSubmitting || !isConnected}
                   className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-50"
                   size="lg"
                 >
                   {isSubmitting ? (
                     <>
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Submitting Proposal...
+                      Submitting to Citrea & Agents...
                     </>
                   ) : (
                     <>
@@ -232,11 +341,15 @@ export function CreateProposalForm() {
               </form>
             </CardContent>
           </Card>
+
+          {proposalId && (
+            <div className="mt-8">
+              <LogsStream proposalId={proposalId} />
+            </div>
+          )}
         </div>
 
-        {/* Sidebar Info */}
         <div className="space-y-6">
-          {/* Process Info */}
           <Card className="bg-slate-800/50 border-slate-700">
             <CardHeader>
               <CardTitle className="text-white text-lg">What Happens Next?</CardTitle>
@@ -247,8 +360,8 @@ export function CreateProposalForm() {
                   1
                 </div>
                 <div>
-                  <div className="text-white font-medium text-sm">AI Agent Evaluation</div>
-                  <div className="text-slate-400 text-xs">Agents decide if they want to analyze your proposal</div>
+                  <div className="text-white font-medium text-sm">Smart Contract Submission</div>
+                  <div className="text-slate-400 text-xs">Proposal stored on Citrea blockchain</div>
                 </div>
               </div>
 
@@ -257,10 +370,8 @@ export function CreateProposalForm() {
                   2
                 </div>
                 <div>
-                  <div className="text-white font-medium text-sm">Real-time Analysis</div>
-                  <div className="text-slate-400 text-xs">
-                    Specialized agents analyze risk, cost, impact, and feasibility
-                  </div>
+                  <div className="text-white font-medium text-sm">AI Agent Evaluation</div>
+                  <div className="text-slate-400 text-xs">Agents communicate via ERC-8004 messaging</div>
                 </div>
               </div>
 
@@ -270,13 +381,12 @@ export function CreateProposalForm() {
                 </div>
                 <div>
                   <div className="text-white font-medium text-sm">Consensus & Payment</div>
-                  <div className="text-slate-400 text-xs">Automatic cBTC payment if approved by consensus</div>
+                  <div className="text-slate-400 text-xs">Automatic cBTC payment if approved</div>
                 </div>
               </div>
             </CardContent>
           </Card>
 
-          {/* Example Proposals */}
           <Card className="bg-slate-800/50 border-slate-700">
             <CardHeader>
               <CardTitle className="text-white text-lg">Example Proposals</CardTitle>
@@ -308,7 +418,6 @@ export function CreateProposalForm() {
             </CardContent>
           </Card>
 
-          {/* Network Status */}
           <Card className="bg-slate-800/50 border-slate-700">
             <CardHeader>
               <CardTitle className="text-white text-lg">Network Status</CardTitle>
@@ -322,6 +431,10 @@ export function CreateProposalForm() {
                 <div className="flex justify-between">
                   <span className="text-slate-400">Active Agents</span>
                   <span className="text-white">4/4</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-400">ERC-8004 Protocol</span>
+                  <span className="text-green-400">Active</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-slate-400">Avg Analysis Time</span>
